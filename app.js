@@ -30,7 +30,7 @@ const store = { get(k){ try{ return localStorage.getItem(k); }catch(e){ return n
 let toastTimer; function toast(t){ const el=$("toast"); el.textContent=t; el.classList.add("show"); clearTimeout(toastTimer); toastTimer=setTimeout(()=>el.classList.remove("show"),3200); }
 const COLORS=["#3D5AFE","#8E44AD","#E63946","#E67E22","#2A9D8F","#D81B60","#2E7D32","#607D8B","#6D4C41"];
 const colorFor = id => { let h=0; for(const c of String(id)) h=(h*31+c.charCodeAt(0))>>>0; return COLORS[h%COLORS.length]; };
-const isPhone = () => window.matchMedia("(max-width:899px)").matches;
+const isPhone = () => window.matchMedia("(max-width:719px)").matches;
 const I = {
   notes:'<svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="3"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>',
   fu:'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.5 2.5L16 9.5"/></svg>',
@@ -341,7 +341,7 @@ function viewNotes(){
   let week=""; for(let i=0;i<7;i++){ const ds=addDays(monday,i), dd=parse(ds), n=(days[ds]||[]).length;
     week+=`<button class="${ds===s?"sel":""} ${ds===t?"today":""}" data-date="${ds}" aria-label="${fmtLong(ds)}, ${n} notes"><span class="d">${DOW[dd.getDay()]}</span><span class="n">${dd.getDate()}</span><span class="pips" aria-hidden="true">${"<b></b>".repeat(Math.min(n,4))}</span></button>`; }
   const dayAll=entriesFor(s), list=dayAll.filter(passes), rel=relDay(s);
-  return `${banners()}${whereLine()}
+  return `<div class="notes-layout"><div class="col-main">${banners()}${whereLine()}
   <div class="day-head">
     <button class="date-btn" data-act="calendar" aria-label="Pick a date. Showing ${fmtLong(s)}"><span class="num">${d.getDate()}</span><span class="rest">${MON[d.getMonth()]} <span>${rel||DOW_LONG[d.getDay()]}</span>${I.down}</span></button>
     <div class="day-nav"><button class="icon-btn" data-act="shift" data-n="-1" aria-label="Previous day">‹</button>${s!==t?`<button class="btn" data-act="today">Today</button>`:""}<button class="icon-btn" data-act="shift" data-n="1" aria-label="Next day">›</button></div>
@@ -350,7 +350,25 @@ function viewNotes(){
   ${composerHTML("i")}
   ${dayAll.length?filterChips():""}
   <div class="list">${!S.notesReady?`<div class="empty"><strong>Loading notes…</strong></div>`:list.length?list.map(n=>noteHTML(n)).join(""):
-    `<div class="empty"><strong>${dayAll.length?"Nothing matches this filter":"No notes for "+(rel?rel.toLowerCase():"this day")+" yet"}</strong>${dayAll.length?`<button class="link" data-act="filter-all">Show all notes</button>`:(isPhone()?"Tap the red + button to add the first one.":"Write the first one in the box above.")}</div>`}</div>`;
+    `<div class="empty"><strong>${dayAll.length?"Nothing matches this filter":"No notes for "+(rel?rel.toLowerCase():"this day")+" yet"}</strong>${dayAll.length?`<button class="link" data-act="filter-all">Show all notes</button>`:(isPhone()?"Tap the red + button to add the first one.":"Write the first one in the box above.")}</div>`}</div>
+  </div>${railHTML()}</div>`;
+}
+function railHTML(){
+  const t=todayISO();
+  const open=openFU().sort((a,b)=>a.date.localeCompare(b.date)||a.createdAt.localeCompare(b.createdAt));
+  const pj=S.space!=="team"?S.projects[S.space]:null;
+  const people=pj?pj.members:teamEmails();
+  return `<aside class="rail" aria-label="Overview">
+    <section class="card"><div id="railCal">${calendarHTML()}</div></section>
+    <section class="card"><h3>Follow-ups <span class="hint">${open.length} to do</span></h3>
+      ${open.length?`<div class="mini">${open.slice(0,6).map(n=>`<button data-date="${n.date}"><i style="background:${n.date<t?"var(--rec)":tagColor(n.tag)}"></i><span>${esc(n.text)}</span><small>${esc(relDay(n.date)||fmtShort(n.date))}, ${esc(nameOf(n.author))}</small></button>`).join("")}</div>
+        ${open.length>6?`<button class="link" data-view="followups">See all ${open.length}</button>`:""}`:`<p class="hint" style="margin:0">Nothing to chase. Switch on "Needs follow-up" when adding a note.</p>`}
+    </section>
+    <section class="card"><h3>${pj?"In this project":"The team"} <span class="hint">${people.length}</span></h3>
+      <div class="mini">${people.slice(0,8).map(e=>`<div style="display:flex;align-items:center;gap:10px;padding:6px 8px;font-size:14px"><span class="av" style="background:${colorFor(e)}">${esc((emailName(e)[0]||"?").toUpperCase())}</span>${esc(emailName(e))}</div>`).join("")}</div>
+      ${pj?`<button class="link" data-act="project" data-id="${pj.id}">${canManage(pj)?"Edit project":"See members"}</button>`:S.isOwner?`<button class="link" data-view="more">Manage team</button>`:""}
+    </section>
+  </aside>`;
 }
 function grouped(items,q){ const m={}; items.forEach(e=>(m[e.date]=m[e.date]||[]).push(e));
   return Object.keys(m).sort().reverse().map(d=>`<div class="group"><span>${esc(relDay(d)||fmtShort(d))}</span><button class="link" data-act="goto" data-date="${d}">Open day</button></div><div class="list">${m[d].sort((a,b)=>a.createdAt.localeCompare(b.createdAt)).map(e=>noteHTML(e,{q})).join("")}</div>`).join(""); }
@@ -413,6 +431,7 @@ function render(){
   const v=$("view");
   const keep={ text:$("iText")?.value, who:$("iWho")?.value, fu:$("iFu")?.checked, focus:document.activeElement?.id,
     addEmail:$("addEmail")?.value, myName:$("myName")?.value, selStart:document.activeElement?.selectionStart };
+  $("main").classList.toggle("wide",S.view==="notes");
   v.innerHTML=S.view==="followups"?viewFollowups():S.view==="search"?viewSearch():S.view==="more"?viewMore():viewNotes();
   if(keep.text!=null&&$("iText")){ $("iText").value=keep.text; $("iWho").value=keep.who||""; $("iFu").checked=!!keep.fu; }
   if(keep.addEmail&&$("addEmail")) $("addEmail").value=keep.addEmail;
@@ -508,7 +527,7 @@ document.addEventListener("click",ev=>{
     case "today": goDay(todayISO()); break;
     case "goto": goDay(b.dataset.date); break;
     case "calendar": S.calMonth=S.date.slice(0,7); openSheet({type:"calendar"}); break;
-    case "cal-move": { const [y,m]=S.calMonth.split("-").map(Number); const d=new Date(y,m-1+Number(b.dataset.n),1); S.calMonth=`${d.getFullYear()}-${pad(d.getMonth()+1)}`; $("calBody").innerHTML=calendarHTML(); break; }
+    case "cal-move": { const [y,m]=S.calMonth.split("-").map(Number); const d=new Date(y,m-1+Number(b.dataset.n),1); S.calMonth=`${d.getFullYear()}-${pad(d.getMonth()+1)}`; if($("calBody")) $("calBody").innerHTML=calendarHTML(); if($("railCal")) $("railCal").innerHTML=calendarHTML(); break; }
     case "notebooks": openSheet({type:"notebooks"}); break;
     case "new-project": openSheet({type:"project"}); break;
     case "project": openSheet({type:"project",id}); break;
