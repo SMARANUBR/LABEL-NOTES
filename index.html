@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Label Notebook</title>
+<meta name="theme-color" content="#16213E">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Label Notebook">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#EEF1F4; --panel:#FFFFFF; --ink:#16213E; --ink-2:#4A5570; --line:#D5DBE3;
+  --rec:#E63946; --done:#2A9D8F; --focus:#3D5AFE; --chip:#E6EAF0;
+  --t-meeting:#3D5AFE; --t-ar:#8E44AD; --t-release:#E63946; --t-marketing:#E67E22;
+  --t-licensing:#2A9D8F; --t-legal:#6D4C41; --t-artist:#D81B60; --t-finance:#2E7D32;
+  --t-admin:#607D8B; --t-idea:#F9A825;
+  --display:"Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --body:"Instrument Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#121826; --panel:#1B2335; --ink:#E8ECF4; --ink-2:#9AA5BC; --line:#2C3650;
+    --chip:#243049; --focus:#8C9EFF;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#121826; --panel:#1B2335; --ink:#E8ECF4; --ink-2:#9AA5BC; --line:#2C3650;
+  --chip:#243049; --focus:#8C9EFF;
+}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*,*::before,*::after{box-sizing:inherit}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15px;line-height:1.5}
+button,input,textarea,select{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.app{max-width:1180px;margin:0 auto;padding:20px 16px 48px;display:grid;grid-template-columns:280px 1fr;gap:24px}
+
+
+/* Sidebar */
+aside{display:flex;flex-direction:column;gap:18px}
+.brand{font-family:var(--display);font-weight:800;font-size:22px;letter-spacing:-.01em;display:flex;align-items:center;gap:10px}
+.brand .dot{width:12px;height:12px;border-radius:50%;background:var(--rec);box-shadow:0 0 0 4px color-mix(in srgb,var(--rec) 20%,transparent)}
+.status{font-size:12px;color:var(--ink-2);margin-top:-12px}
+.box{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px}
+.search{width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg)}
+.cal-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.cal-head strong{font-family:var(--display);font-weight:600}
+.icon-btn{border:1px solid var(--line);background:transparent;border-radius:8px;width:30px;height:30px;display:inline-grid;place-items:center}
+.cal{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;text-align:center;font-size:13px}
+.cal .dow{color:var(--ink-2);font-size:11px;padding:4px 0}
+.cal button{border:0;background:transparent;border-radius:8px;padding:6px 0 8px;position:relative}
+.cal button.out{color:var(--ink-2);opacity:.45}
+.cal button.today{font-weight:700;color:var(--rec)}
+.cal button.sel{background:var(--ink);color:var(--panel)}
+.cal button.has::after{content:"";position:absolute;left:50%;bottom:3px;width:4px;height:4px;margin-left:-2px;border-radius:50%;background:currentColor;opacity:.7}
+.side-title{font-weight:600;font-size:13px;margin:0 0 8px;color:var(--ink-2)}
+.tags{display:flex;flex-wrap:wrap;gap:6px}
+.chip{border:1px solid var(--line);background:var(--chip);border-radius:999px;padding:4px 10px;font-size:13px;display:inline-flex;align-items:center;gap:6px}
+.chip i{width:8px;height:8px;border-radius:50%;display:inline-block}
+.chip[aria-pressed="true"]{background:var(--ink);color:var(--panel);border-color:var(--ink)}
+.side-link{width:100%;text-align:left;border:1px solid var(--line);background:var(--panel);border-radius:12px;padding:12px 14px;display:flex;justify-content:space-between;align-items:center;font-weight:500}
+.side-link[aria-current="true"]{border-color:var(--ink);box-shadow:inset 0 0 0 1px var(--ink)}
+.count{background:var(--rec);color:#fff;border-radius:999px;font-size:12px;padding:1px 8px;font-weight:600}
+.count.zero{background:var(--chip);color:var(--ink-2)}
+
+/* Main */
+main{min-width:0}
+.day-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:14px}
+.big-date{font-family:var(--display);line-height:.9;letter-spacing:-.03em}
+.big-date .num{font-size:clamp(64px,11vw,112px);font-weight:800}
+.big-date .rest{font-size:clamp(18px,2.4vw,24px);font-weight:600;display:block;margin-top:6px;letter-spacing:-.01em}
+.big-date .rest span{color:var(--ink-2);font-weight:400}
+.nav{display:flex;gap:6px;align-items:center}
+.btn{border:1px solid var(--line);background:var(--panel);border-radius:10px;padding:8px 14px;font-weight:500}
+.btn.primary{background:var(--ink);color:var(--panel);border-color:var(--ink)}
+.btn:disabled{opacity:.5;cursor:default}
+input[type=date].btn{padding:7px 10px}
+
+.strip{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;margin-bottom:18px}
+.strip button{border:1px solid var(--line);background:var(--panel);border-radius:12px;padding:8px 4px 10px;display:flex;flex-direction:column;align-items:center;gap:2px}
+.strip .d{font-size:11px;color:var(--ink-2)}
+.strip .n{font-family:var(--display);font-weight:600;font-size:20px}
+.strip .bars{display:flex;gap:2px;height:14px;align-items:flex-end}
+.strip .bars b{width:3px;border-radius:2px;background:var(--ink-2);opacity:.6}
+.strip button.sel{background:var(--ink);color:var(--panel);border-color:var(--ink)}
+.strip button.sel .d{color:inherit;opacity:.75}
+.strip button.sel .bars b{background:var(--panel)}
+.strip button.today .n{color:var(--rec)}
+.strip button.sel.today .n{color:inherit}
+
+.composer{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:14px;margin-bottom:20px}
+.composer textarea{width:100%;min-height:84px;border:0;background:transparent;resize:vertical;outline:none;font-size:16px}
+.composer .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;border-top:1px solid var(--line);padding-top:10px;margin-top:6px}
+.composer .left{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.composer select,.composer input[type=text]{border:1px solid var(--line);background:var(--bg);border-radius:8px;padding:6px 8px}
+.composer input[type=text]{width:180px;max-width:100%}
+.check{display:inline-flex;align-items:center;gap:6px;font-size:14px}
+.hint{font-size:12px;color:var(--ink-2)}
+
+.entries{display:flex;flex-direction:column;gap:0;position:relative}
+.entry{display:grid;grid-template-columns:64px 1fr;gap:14px;padding:14px 0;border-top:1px solid var(--line)}
+.entry:first-child{border-top:0}
+.entry .time{font-size:13px;color:var(--ink-2);padding-top:2px;font-variant-numeric:tabular-nums}
+.entry .meta{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:4px;font-size:13px}
+.tag{display:inline-flex;align-items:center;gap:6px;font-weight:600}
+.tag i{width:8px;height:8px;border-radius:50%}
+.who{color:var(--ink-2)}
+.entry .text{white-space:pre-wrap;word-wrap:break-word}
+.entry.is-done .text{color:var(--ink-2);text-decoration:line-through;text-decoration-thickness:1px}
+.entry .actions{display:flex;gap:4px;margin-top:8px;flex-wrap:wrap}
+.link{border:0;background:transparent;color:var(--ink-2);font-size:13px;padding:2px 6px;border-radius:6px}
+.link:hover{color:var(--ink);background:var(--chip)}
+.fu{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--rec);color:var(--rec);border-radius:999px;padding:1px 9px;font-size:12px;font-weight:600;background:transparent}
+.fu.done{border-color:var(--done);color:var(--done)}
+.edit textarea{width:100%;min-height:70px;border:1px solid var(--line);border-radius:10px;padding:8px;background:var(--bg)}
+.edit .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center}
+.edit select,.edit input[type=text]{border:1px solid var(--line);background:var(--bg);border-radius:8px;padding:6px 8px}
+
+.empty{padding:36px 8px;color:var(--ink-2);text-align:left}
+.empty strong{display:block;color:var(--ink);font-family:var(--display);font-size:20px;font-weight:600;margin-bottom:4px}
+.section-title{font-family:var(--display);font-weight:800;font-size:clamp(32px,5vw,48px);letter-spacing:-.02em;margin:0 0 4px}
+.sub{color:var(--ink-2);margin:0 0 18px}
+.group-date{font-family:var(--display);font-weight:600;font-size:18px;margin:22px 0 4px;display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.group-date button{font-size:13px}
+mark{background:color-mix(in srgb,var(--t-idea) 45%,transparent);color:inherit;border-radius:3px;padding:0 1px}
+.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--panel);padding:10px 16px;border-radius:10px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .2s}
+.toast.show{opacity:1}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+@media (max-width:860px){
+  .app{display:flex;flex-direction:column;gap:14px}
+  aside{display:contents}
+  aside > *{order:0}
+  main{order:1;margin-top:6px}
+  aside > .box, aside > .tag-wrap{order:2}
+  .status{margin-top:-8px}
+}
+@media (pointer:coarse){.kbd{display:none}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside>
+    <div class="brand"><span class="dot" aria-hidden="true"></span>Label Notebook</div>
+    <div class="status" id="status">Loading your notes…</div>
+
+    <input id="search" class="search" type="search" placeholder="Search all notes" aria-label="Search all notes">
+
+    <div class="box">
+      <div class="cal-head">
+        <button class="icon-btn" id="calPrev" aria-label="Previous month">‹</button>
+        <strong id="calTitle"></strong>
+        <button class="icon-btn" id="calNext" aria-label="Next month">›</button>
+      </div>
+      <div class="cal" id="cal"></div>
+    </div>
+
+    <button class="side-link" id="fuLink">Open follow-ups <span class="count zero" id="fuCount">0</span></button>
+
+    <div class="tag-wrap">
+      <p class="side-title">Filter by category</p>
+      <div class="tags" id="tagFilters"></div>
+    </div>
+
+    <div class="box sync">
+      <p class="side-title" style="margin-bottom:4px">Sync between devices</p>
+      <p class="hint" id="syncInfo" style="margin:0 0 10px">Make a sync file here, then open it on your other device.</p>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <button class="btn primary" id="syncOut">Create sync file</button>
+        <button class="btn" id="syncIn">Open sync file</button>
+        <button class="btn" id="exportBtn">Export notes as text (.md)</button>
+        <button class="btn" id="installBtn" hidden>Install app</button>
+      </div>
+      <input type="file" id="syncFile" accept=".json,application/json" hidden>
+    </div>
+  </aside>
+
+  <main id="main"></main>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
