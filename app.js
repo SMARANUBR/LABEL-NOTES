@@ -46,8 +46,8 @@ const I = {
   people:'<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 19c.8-3 3.2-4.5 6-4.5s5.2 1.5 6 4.5M16 5.5a3 3 0 0 1 0 5.5M18 14.5c1.5.6 2.5 2 3 4.5"/></svg>',
   down:'<svg viewBox="0 0 24 24" width="16" height="16" style="stroke:currentColor;fill:none;stroke-width:2"><path d="M6 9l6 6 6-6"/></svg>'
 };
-window.addEventListener("error",ev=>{ if(/Loading|Opening/.test(root.textContent)) root.innerHTML=`<div class="gate"><div class="box"><h1><span class="rec"></span>Label Notebook</h1><p>The app hit an error: <strong>${esc(ev.message)}</strong></p><p>Most often this means config.js has a typo (a missing quote mark or comma). Re-copy it from Firebase and upload it again.</p></div></div>`; });
-const brand = `<h1><span class="rec"></span>Label Notebook</h1>`;
+window.addEventListener("error",ev=>{ if(/Loading|Opening/.test(root.textContent)) root.innerHTML=`<div class="gate"><div class="box"><h1><span class="rec"></span>Keep Up with UBR</h1><p>The app hit an error: <strong>${esc(ev.message)}</strong></p><p>Most often this means config.js has a typo (a missing quote mark or comma). Re-copy it from Firebase and upload it again.</p></div></div>`; });
+const brand = `<h1><span class="rec"></span>Keep Up with UBR</h1>`;
 function gate(html){ sheetRoot.innerHTML=""; root.innerHTML=`<div class="gate"><div class="box">${brand}${html}</div></div>`; }
 
 /* ================= setup check ================= */
@@ -246,7 +246,7 @@ function deleteProject(id){ const p=S.projects[id]; if(!p) return;
 function buildShell(){
   root.innerHTML=`<div class="shell">
     <aside class="side" aria-label="Navigation">
-      <div class="brand"><span class="rec"></span>Label Notebook</div>
+      <div class="brand"><span class="rec"></span>Keep Up with UBR</div>
       <div><p class="side-label">Notebooks</p><div class="nav" id="sideNbs"></div></div>
       <div><p class="side-label">Go to</p><div class="nav" id="sideNav"></div></div>
       <div class="side-foot" id="sideFoot"></div>
@@ -586,7 +586,7 @@ function exportAll(){
 }
 let deferredPrompt=null;
 window.addEventListener("beforeinstallprompt",e=>{ e.preventDefault(); deferredPrompt=e; if(S.view==="more") render(); });
-window.addEventListener("appinstalled",()=>{ deferredPrompt=null; toast("Installed. Open Label Notebook from your apps."); });
+window.addEventListener("appinstalled",()=>{ deferredPrompt=null; toast("Installed. Open Keep Up with UBR from your apps."); });
 async function promptInstall(){ if(!deferredPrompt) return; deferredPrompt.prompt(); await deferredPrompt.userChoice.catch(()=>{}); deferredPrompt=null; render(); }
 if("serviceWorker" in navigator && location.protocol!=="file:") navigator.serviceWorker.register("sw.js").catch(()=>{});
 })();
