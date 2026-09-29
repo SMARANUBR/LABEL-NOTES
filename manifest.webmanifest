@@ -1,7 +1,7 @@
 {
   "name": "Label Notebook",
   "short_name": "Notebook",
-  "description": "Date-wise work notes for the label. Works offline.",
+  "description": "The label's shared, date-wise work notebook.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",

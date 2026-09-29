@@ -147,49 +147,45 @@ mark{background:color-mix(in srgb,var(--t-idea) 45%,transparent);color:inherit;b
 }
 @media (pointer:coarse){.kbd{display:none}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+
+.avatar{width:20px;height:20px;border-radius:50%;display:inline-grid;place-items:center;font-size:11px;font-weight:700;color:#fff;margin-right:6px;vertical-align:-5px}
+.by{color:var(--ink-2);font-size:13px;display:inline-flex;align-items:center;padding:2px 6px}
+.banner{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--rec);border-radius:12px;padding:12px 14px;margin-bottom:16px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between}
+.banner p{margin:0}
+.gate{min-height:100vh;display:grid;place-items:center;padding:24px}
+.gate .card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:28px;max-width:420px;width:100%}
+.gate h1{font-family:var(--display);font-weight:800;font-size:34px;letter-spacing:-.02em;margin:0 0 6px;display:flex;gap:10px;align-items:center}
+.gate p{color:var(--ink-2);margin:0 0 18px}
+.field{display:block;margin-bottom:12px}
+.field span{display:block;font-size:13px;font-weight:600;margin-bottom:4px}
+.field input{width:100%;padding:11px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);font-size:16px}
+.gate .btn{width:100%;padding:11px;margin-top:4px}
+.switch{margin-top:14px;font-size:14px;color:var(--ink-2);display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.err{color:var(--rec);font-size:14px;min-height:20px;margin:4px 0 8px}
+.members{list-style:none;padding:0;margin:8px 0 10px;font-size:14px}
+.members li{display:flex;justify-content:space-between;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid var(--line);word-break:break-all}
+.addrow{display:flex;gap:6px}
+.addrow input{flex:1;min-width:0;padding:7px 9px;border-radius:8px;border:1px solid var(--line);background:var(--bg)}
+.sync-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--done);margin-right:6px;vertical-align:1px}
+.sync-dot.pending{background:var(--t-idea)}
+.sync-dot.off{background:var(--ink-2)}
+.readonly .composer{display:none}
+@media (max-width:860px){
+  .app{display:flex;flex-direction:column;gap:14px}
+  aside{display:contents}
+  aside > *{order:0}
+  main{order:1;margin-top:6px}
+  aside > .box, aside > .tag-wrap, aside > .order-last{order:2}
+}
 </style>
 </head>
 <body>
-<div class="app">
-  <aside>
-    <div class="brand"><span class="dot" aria-hidden="true"></span>Label Notebook</div>
-    <div class="status" id="status">Loading your notes…</div>
-
-    <input id="search" class="search" type="search" placeholder="Search all notes" aria-label="Search all notes">
-
-    <div class="box">
-      <div class="cal-head">
-        <button class="icon-btn" id="calPrev" aria-label="Previous month">‹</button>
-        <strong id="calTitle"></strong>
-        <button class="icon-btn" id="calNext" aria-label="Next month">›</button>
-      </div>
-      <div class="cal" id="cal"></div>
-    </div>
-
-    <button class="side-link" id="fuLink">Open follow-ups <span class="count zero" id="fuCount">0</span></button>
-
-    <div class="tag-wrap">
-      <p class="side-title">Filter by category</p>
-      <div class="tags" id="tagFilters"></div>
-    </div>
-
-    <div class="box sync">
-      <p class="side-title" style="margin-bottom:4px">Sync between devices</p>
-      <p class="hint" id="syncInfo" style="margin:0 0 10px">Make a sync file here, then open it on your other device.</p>
-      <div style="display:flex;flex-direction:column;gap:8px">
-        <button class="btn primary" id="syncOut">Create sync file</button>
-        <button class="btn" id="syncIn">Open sync file</button>
-        <button class="btn" id="exportBtn">Export notes as text (.md)</button>
-        <button class="btn" id="installBtn" hidden>Install app</button>
-      </div>
-      <input type="file" id="syncFile" accept=".json,application/json" hidden>
-    </div>
-  </aside>
-
-  <main id="main"></main>
-</div>
+<div id="root"><div class="gate"><div class="card"><h1><span class="dot" style="width:12px;height:12px;border-radius:50%;background:var(--rec)"></span>Label Notebook</h1><p>Loading…</p></div></div></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
-
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="config.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
