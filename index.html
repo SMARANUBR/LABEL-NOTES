@@ -182,6 +182,19 @@ mark{background:color-mix(in srgb,var(--t-idea) 45%,transparent);color:inherit;b
 .who{display:flex;align-items:center;gap:10px;min-width:0}
 .link{border:0;background:transparent;color:var(--focus);font-weight:600;padding:6px 4px;border-radius:8px}
 
+
+.bell-btn{position:relative;border:1px solid var(--line);background:var(--panel);border-radius:12px;width:44px;height:44px;display:grid;place-items:center;color:var(--ink);flex:none}
+.bell-btn svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.bell-btn .badge{position:absolute;top:-6px;right:-6px;font-size:11px;padding:0 6px}
+.alert{display:grid;grid-template-columns:34px 1fr 12px;gap:12px;align-items:start;text-align:left;width:100%;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px 14px;font-size:15px}
+.alert:hover{background:var(--hover)}
+.alert .av{width:34px;height:34px;font-size:14px}
+.alert.unread{border-color:var(--ink);box-shadow:inset 3px 0 0 var(--rec)}
+.alert-body{display:flex;flex-direction:column;gap:2px;min-width:0}
+.alert-text{color:var(--ink-2);font-size:14px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.alert .dot{width:10px;height:10px;border-radius:50%;background:var(--rec);margin-top:6px}
+.cat .av{color:#fff}
+
 /* sheets */
 .overlay{position:fixed;inset:0;background:rgba(10,14,26,.45);display:flex;align-items:center;justify-content:center;z-index:50;padding:20px}
 .sheet{background:var(--panel);border-radius:22px;box-shadow:var(--shadow);width:100%;max-width:520px;max-height:min(88vh,760px);overflow:auto;padding:20px}

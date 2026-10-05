@@ -44,6 +44,7 @@ const I = {
   trash:'<svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',
   lock:'<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
   people:'<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 19c.8-3 3.2-4.5 6-4.5s5.2 1.5 6 4.5M16 5.5a3 3 0 0 1 0 5.5M18 14.5c1.5.6 2.5 2 3 4.5"/></svg>',
+  bell:'<svg viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg>',
   down:'<svg viewBox="0 0 24 24" width="16" height="16" style="stroke:currentColor;fill:none;stroke-width:2"><path d="M6 9l6 6 6-6"/></svg>'
 };
 window.addEventListener("error",ev=>{ if(/Loading|Opening/.test(root.textContent)) root.innerHTML=`<div class="gate"><div class="box"><h1><span class="rec"></span>Keep Up with UBR</h1><p>The app hit an error: <strong>${esc(ev.message)}</strong></p><p>Most often this means config.js has a typo (a missing quote mark or comma). Re-copy it from Firebase and upload it again.</p></div></div>`; });
@@ -63,7 +64,8 @@ fs.enablePersistence({synchronizeTabs:true}).catch(()=>{});
 const S = { user:null, member:false, isOwner:false, team:[], teamLoaded:false, profiles:{},
   notes:{}, notesReady:false, pending:false, space:"team", projects:{}, projectsReady:false,
   view:"notes", date:todayISO(), calMonth:todayISO().slice(0,7), filter:null, mine:false, query:"", fuTab:"open",
-  draft:{tag:"meeting"}, composerOpen:false, sheet:null, seenAt:"", legacy:null };
+  draft:{tag:"meeting"}, composerOpen:false, sheet:null, seenAt:"", legacy:null,
+  alerts:{}, alertsReady:false, notify:new Set() };
 let unsub=[], notesUnsub=null;
 function stopAll(){ unsub.forEach(f=>{try{f();}catch(e){}}); unsub=[]; if(notesUnsub){ notesUnsub(); notesUnsub=null; } }
 const myEmail=()=>S.user.email.toLowerCase();
@@ -155,6 +157,16 @@ function startNotebook(){
     render();
   }, ()=>{ S.projectsReady=true; }));
   unsub.push(fs.collection("profiles").onSnapshot(snap=>{ snap.docs.forEach(d=>S.profiles[d.id]=d.data()); render(); }, ()=>{}));
+  unsub.push(fs.collection("notifications").where("to","==",myEmail()).limit(150).onSnapshot(snap=>{
+    const first=!S.alertsReady;
+    snap.docChanges().forEach(ch=>{
+      const v={id:ch.doc.id,...ch.doc.data()};
+      if(ch.type==="removed"){ delete S.alerts[v.id]; return; }
+      S.alerts[v.id]=v;
+      if(!first&&ch.type==="added"&&!v.read) announce(v);
+    });
+    S.alertsReady=true; renderChrome(); if(S.view==="alerts") render();
+  }, ()=>{ S.alertsReady=true; }));
   checkLegacy();
 }
 function setSpace(id){
@@ -162,6 +174,7 @@ function setSpace(id){
   // remember when you last looked at the notebook you're leaving
   if(S.space) store.set("ln-seen-"+S.user.uid+"-"+S.space, nowISO());
   S.space=id; S.filter=null; S.mine=false; store.set("ln-space-"+S.user.uid,id);
+  S.notify=new Set(defaultNotify());
   S.seenAt=store.get("ln-seen-"+S.user.uid+"-"+id)||nowISO();
   if(notesUnsub){ notesUnsub(); notesUnsub=null; }
   S.notes={}; S.notesReady=false;
@@ -192,11 +205,73 @@ const canManage=p=>p&&(p.createdBy===S.user.uid||S.isOwner);
 function fail(e){ toast(e&&e.code==="permission-denied"?"You don't have permission to do that.":"Couldn't save. It will retry when you're back online."); }
 function highlight(text,q){ const safe=esc(text); if(!q) return safe; const re=new RegExp(esc(q).replace(/[.*+?^${}()|[\]\\]/g,"\\$&"),"gi"); return safe.replace(re,m=>`<mark>${m}</mark>`); }
 
-function saveNote(fields, id){
+function saveNote(fields, id, recipients){
   if(id){ notesCol().doc(id).update({...fields, updatedAt:nowISO(), editedBy:S.user.uid}).catch(fail); return; }
   const now=new Date(), d=parse(fields.date); d.setHours(now.getHours(),now.getMinutes(),now.getSeconds(),now.getMilliseconds());
-  notesCol().add({...fields, done:false, createdAt:d.toISOString(), updatedAt:nowISO(), author:S.user.uid, editedBy:S.user.uid}).catch(fail);
+  const ref=notesCol().doc();
+  ref.set({...fields, done:false, createdAt:d.toISOString(), updatedAt:nowISO(), author:S.user.uid, editedBy:S.user.uid}).catch(fail);
+  if(recipients&&recipients.length) sendAlerts(recipients, {noteId:ref.id, date:fields.date, text:fields.text});
 }
+
+/* ================= notifications ================= */
+const spaceMembers=()=>S.space==="team"?teamEmails():(S.projects[S.space]?.members||[]);
+const defaultNotify=()=>S.space==="team"?[]:spaceMembers().filter(e=>e!==myEmail());
+const profileByEmail=e=>Object.values(S.profiles).find(p=>p.email===e);
+function mentionsIn(text){
+  const t=" "+text.toLowerCase();
+  return spaceMembers().filter(e=>{ if(e===myEmail()) return false;
+    const n=(profileByEmail(e)?.name||e.split("@")[0]).toLowerCase(); const first=n.split(/\s+/)[0];
+    return t.includes("@"+first)||t.includes("@"+n); });
+}
+function sendAlerts(list, info){
+  const b=fs.batch(), when=nowISO(), from=S.user.displayName||S.user.email;
+  list.forEach(r=>{ if(!r.to||r.to===myEmail()) return;
+    b.set(fs.collection("notifications").doc(), { to:r.to, type:r.type, from:S.user.uid, fromName:from,
+      space:S.space, spaceName:spaceName(), noteId:info.noteId, date:info.date, text:String(info.text||"").slice(0,280),
+      createdAt:when, read:false, emailed:false, sendEmail:profileByEmail(r.to)?.emailNotify!==false,
+      appUrl:location.href.split("#")[0].split("?")[0] });
+  });
+  b.commit().catch(()=>toast("Your note was saved, but the notifications couldn't be sent."));
+}
+const unreadCount=()=>Object.values(S.alerts).filter(a=>!a.read).length;
+function alertLine(a){
+  const who=`<strong>${esc(a.fromName||"Someone")}</strong>`, where=`<strong>${esc(a.spaceName||"a notebook")}</strong>`;
+  if(a.type==="mention") return `${who} mentioned you in ${where}`;
+  if(a.type==="done") return `${who} marked your follow-up done in ${where}`;
+  return `${who} added a note in ${where}`;
+}
+function ago(t){ const m=Math.round((Date.now()-new Date(t))/60000); if(m<1) return "just now"; if(m<60) return m+" min ago"; const h=Math.round(m/60); if(h<24) return h+" h ago"; const d=Math.round(h/24); return d===1?"yesterday":d+" days ago"; }
+function announce(a){
+  const plain=alertLine(a).replace(/<[^>]+>/g,"");
+  toast(plain);
+  if(store.get("ln-popups-"+S.user.uid)==="1"&&"Notification" in window&&Notification.permission==="granted"){
+    const opts={body:a.text||"", icon:"icon-192.png", tag:a.id};
+    if(navigator.serviceWorker&&navigator.serviceWorker.controller) navigator.serviceWorker.ready.then(r=>r.showNotification(plain,opts)).catch(()=>{});
+    else { try{ new Notification(plain,opts); }catch(e){} }
+  }
+}
+function openAlert(id){
+  const a=S.alerts[id]; if(!a) return;
+  if(!a.read) fs.doc("notifications/"+id).update({read:true}).catch(()=>{});
+  if(a.space!=="team"&&!S.projects[a.space]){ toast("You no longer have access to that project."); return; }
+  if(a.space!==S.space) setSpace(a.space);
+  goDay(a.date||todayISO());
+}
+function markAllRead(){
+  const b=fs.batch(); let n=0;
+  Object.values(S.alerts).forEach(a=>{ if(!a.read){ b.update(fs.doc("notifications/"+a.id),{read:true}); n++; } });
+  if(n) b.commit().catch(()=>{});
+}
+function notifyChips(p){
+  const people=spaceMembers().filter(e=>e!==myEmail());
+  if(!people.length) return `<p class="hint" style="margin:0">Add people to the team to notify them.</p>`;
+  return `<div><span class="label" style="margin:0 0 6px">Notify</span><div class="cats" role="group" aria-label="People to notify">
+    ${people.map(e=>`<button type="button" class="cat" data-ntf="${esc(e)}" aria-pressed="${S.notify.has(e)}">${avatarEmail(e)}${esc(emailName(e))}</button>`).join("")}
+    <button type="button" class="cat" data-act="ntf-all" style="border-style:dashed">${S.space==="team"?"Everyone":"All members"}</button>
+    <button type="button" class="cat" data-act="ntf-none" style="border-style:dashed">No one</button>
+  </div><p class="hint" style="margin:6px 0 0">Tip: type @ and a name in your note, e.g. @${esc(emailName(people[0]).split(" ")[0])}, to notify them too.</p></div>`;
+}
+function avatarEmail(e){ const p=profileByEmail(e); const n=p?.name||e; return `<span class="av" style="width:18px;height:18px;font-size:10px;background:${colorFor(e)}" aria-hidden="true">${esc((n[0]||"?").toUpperCase())}</span>`; }
 const updateNote=(id,patch)=>notesCol().doc(id).update({...patch, updatedAt:nowISO(), editedBy:S.user.uid}).catch(fail);
 const deleteNote=id=>notesCol().doc(id).delete().catch(fail);
 
@@ -264,6 +339,7 @@ function buildShell(){
   render();
 }
 const VIEWS=[{id:"notes",label:"Notes",icon:I.notes},{id:"followups",label:"Follow-ups",icon:I.fu},{id:"search",label:"Search",icon:I.search},{id:"more",label:"Settings",icon:I.more}];
+const SIDE_VIEWS=[VIEWS[0],{id:"alerts",label:"Notifications",icon:I.bell},VIEWS[1],VIEWS[2],VIEWS[3]];
 function syncHTML(){ const on=navigator.onLine; const cls=!on?"off":S.pending?"pending":""; return `<span class="sync ${cls}"><i></i>${!on?"Offline, will sync later":S.pending?"Syncing…":"Up to date"}</span>`; }
 function avatar(uid,cls=""){ const n=realName(uid); return `<span class="av ${cls}" style="background:${colorFor(uid)}" aria-hidden="true">${esc((n[0]||"?").toUpperCase())}</span>`; }
 function nbList(){
@@ -275,10 +351,12 @@ function renderChrome(){
   const fuN=openFU().length;
   $("sideNbs").innerHTML=nbList().map(n=>`<button class="nav-btn" data-space="${n.id}" aria-current="${S.space===n.id}"><span class="nb-dot" style="background:${n.id==="team"?"var(--ink)":colorFor(n.id)}"></span><span class="grow">${esc(n.name)}</span>${n.id!=="team"?`<span style="opacity:.6;display:flex">${I.lock.replace('<svg','<svg width="15" height="15" style="stroke:currentColor;fill:none;stroke-width:2"')}</span>`:""}</button>`).join("")+
     `<button class="nav-btn" data-act="new-project" style="color:var(--ink-2)">${I.plus}<span class="grow">New project</span></button>`;
-  $("sideNav").innerHTML=VIEWS.map(v=>`<button class="nav-btn" data-view="${v.id}" aria-current="${S.view===v.id}">${v.icon}<span class="grow">${v.label}</span>${v.id==="followups"?`<span class="badge ${fuN?"":"zero"}">${fuN}</span>`:""}</button>`).join("");
+  const unN=unreadCount();
+  $("sideNav").innerHTML=SIDE_VIEWS.map(v=>{ const c=v.id==="followups"?fuN:v.id==="alerts"?unN:0;
+    return `<button class="nav-btn" data-view="${v.id}" aria-current="${S.view===v.id}">${v.icon}<span class="grow">${v.label}</span>${v.id==="followups"||v.id==="alerts"?`<span class="badge ${c?"":"zero"}">${c}</span>`:""}</button>`; }).join("");
   $("sideFoot").innerHTML=`${avatar(S.user.uid,"lg")}<div style="min-width:0"><div class="me-name">${esc(S.user.displayName||S.user.email)}</div>${syncHTML()}</div>`;
   const cur=S.space;
-  $("topbar").innerHTML=`<button class="nb-switch" data-act="notebooks" aria-label="Switch notebook"><span class="nb-dot" style="background:${cur==="team"?"var(--ink)":colorFor(cur)}"></span><span class="t">${esc(spaceName())}</span>${I.down}</button>${syncHTML()}`;
+  $("topbar").innerHTML=`<button class="nb-switch" data-act="notebooks" aria-label="Switch notebook"><span class="nb-dot" style="background:${cur==="team"?"var(--ink)":colorFor(cur)}"></span><span class="t">${esc(spaceName())}</span>${I.down}</button><button class="bell-btn" data-view="alerts" aria-label="Notifications${unN?`, ${unN} unread`:""}">${I.bell}${unN?`<span class="badge">${unN>9?"9+":unN}</span>`:""}</button>`;
   $("tabbar").innerHTML=VIEWS.map(v=>`<button data-view="${v.id}" aria-current="${S.view===v.id}">${v.icon}${v.label}${v.id==="followups"&&fuN?`<span class="badge">${fuN}</span>`:""}</button>`).join("");
   $("fab").style.visibility=(S.view==="notes"||S.view==="followups")?"visible":"hidden";
 }
@@ -299,6 +377,7 @@ function composerHTML(p, note){
       <div class="cats" role="group" aria-label="Category">${TAGS.map(t=>`<button type="button" class="cat" data-cat="${t.id}" data-p="${p}" aria-pressed="${t.id===tag}"><i style="background:${tagColor(t.id)}"></i>${esc(t.label)}</button>`).join("")}</div>
       <input class="input" id="${p}Who" value="${esc(d.who||"")}" placeholder="Person or company (optional)" aria-label="Person or company">
       ${p!=="i"?`<label class="field" style="margin:0"><span>Day</span><input class="input" type="date" id="${p}Date" value="${esc(d.date||S.date)}"></label>`:""}
+      ${note?"":notifyChips(p)}
       <div class="foot">
         <label class="switch"><input type="checkbox" id="${p}Fu" ${d.followUp?"checked":""}> Needs follow-up</label>
         <div style="display:flex;gap:8px">${p==="i"?`<button class="btn" data-act="collapse">Cancel</button>`:""}<button class="btn primary" data-act="save-note" data-p="${p}" ${note?`data-id="${note.id}"`:""}>${note?"Save changes":"Add note"}</button></div>
@@ -394,6 +473,20 @@ function viewSearch(){
     ${filterChips()}
     ${!q?`<p class="hint">Search looks through every note in ${esc(spaceName())}, including who wrote it.</p>`:items.length?`<p class="hint">${items.length} ${items.length===1?"note":"notes"} found</p>${grouped(items,S.query.trim())}`:`<div class="empty"><strong>No matches</strong>Try a person's name, a song title or a company.</div>`}`;
 }
+function viewAlerts(){
+  const list=Object.values(S.alerts).sort((a,b)=>(b.createdAt||"").localeCompare(a.createdAt||""));
+  const unN=unreadCount();
+  return `<h1 class="page-title">Notifications</h1><p class="sub">Notes your team shared with you, mentions, and follow-ups marked done.</p>
+    ${unN?`<button class="btn" data-act="read-all" style="margin-bottom:12px">Mark all as read (${unN})</button>`:""}
+    ${!S.alertsReady?`<div class="empty"><strong>Loading…</strong></div>`:list.length?`<div class="list">${list.map(a=>`
+      <button class="alert ${a.read?"":"unread"}" data-alert="${a.id}">
+        <span class="av" style="background:${colorFor(a.from)}" aria-hidden="true">${esc(((a.fromName||"?")[0]).toUpperCase())}</span>
+        <span class="alert-body"><span>${alertLine(a)}</span>
+          ${a.text?`<span class="alert-text">${esc(a.text)}</span>`:""}
+          <span class="hint" style="font-size:13px">${esc(ago(a.createdAt))}${a.date?` · note for ${esc(relDay(a.date)||fmtShort(a.date))}`:""}</span></span>
+        ${a.read?"":`<span class="dot" aria-label="Unread"></span>`}
+      </button>`).join("")}</div>`:`<div class="empty"><strong>No notifications yet</strong>When someone adds a note for you, mentions you with @, or marks your follow-up done, it shows up here.</div>`}`;
+}
 function viewMore(){
   const people=teamEmails();
   return `<h1 class="page-title">Settings</h1><p class="sub">Your account, your team and the app.</p>
@@ -414,6 +507,12 @@ function viewMore(){
     <div class="menu-list">${nbList().map(n=>`<button data-space="${n.id}" class="${S.space===n.id?"on":""}"><span class="nb-dot" style="background:${n.id==="team"?"var(--ink)":colorFor(n.id)}"></span><span>${esc(n.name)}<small>${esc(n.sub)}</small></span></button>`).join("")}
     <button data-act="new-project">${I.plus}<span>New project</span></button></div>
   </section>
+  <section class="card"><h2>Notifications</h2>
+    <label class="switch" style="display:flex"><input type="checkbox" id="optEmail" ${S.profiles[S.user.uid]?.emailNotify===false?"":"checked"}> Email me when I get a notification</label>
+    <p class="hint" style="margin:0 0 6px 54px">Only for notifications you haven't already seen in the app.</p>
+    <label class="switch" style="display:flex"><input type="checkbox" id="optPopup" ${store.get("ln-popups-"+S.user.uid)==="1"&&"Notification" in window&&Notification.permission==="granted"?"checked":""}> Show pop-up alerts on this device</label>
+    <p class="hint" style="margin:0 0 0 54px">Pop-ups appear while the app is open. They are free and need no setup.</p>
+  </section>
   <section class="card"><h2>App</h2>
     <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">
       ${deferredPrompt?`<button class="btn primary" data-act="install">Install app</button>`:""}
@@ -432,7 +531,7 @@ function render(){
   const keep={ text:$("iText")?.value, who:$("iWho")?.value, fu:$("iFu")?.checked, focus:document.activeElement?.id,
     addEmail:$("addEmail")?.value, myName:$("myName")?.value, selStart:document.activeElement?.selectionStart };
   $("main").classList.toggle("wide",S.view==="notes");
-  v.innerHTML=S.view==="followups"?viewFollowups():S.view==="search"?viewSearch():S.view==="more"?viewMore():viewNotes();
+  v.innerHTML=S.view==="alerts"?viewAlerts():S.view==="followups"?viewFollowups():S.view==="search"?viewSearch():S.view==="more"?viewMore():viewNotes();
   if(keep.text!=null&&$("iText")){ $("iText").value=keep.text; $("iWho").value=keep.who||""; $("iFu").checked=!!keep.fu; }
   if(keep.addEmail&&$("addEmail")) $("addEmail").value=keep.addEmail;
   if(keep.myName!=null&&$("myName")&&keep.focus==="myName") $("myName").value=keep.myName;
@@ -500,11 +599,19 @@ function submitComposer(p, id){
   const date=$(p+"Date")?.value||(id?S.notes[id].date:S.date);
   const fields={text, tag, who:$(p+"Who").value.trim(), followUp:$(p+"Fu").checked, date};
   if(id&&!fields.followUp) fields.done=false;
-  saveNote(fields, id);
+  let recipients=null;
+  if(!id){
+    const mentioned=new Set(mentionsIn(text));
+    const picked=new Set([...S.notify,...mentioned]);
+    recipients=[...picked].map(e=>({to:e, type:mentioned.has(e)?"mention":"note"}));
+  }
+  saveNote(fields, id, recipients);
+  if(!id) S.notify=new Set(defaultNotify());
   if(p==="s"){ closeSheet(); if(!id&&date!==S.date){ S.date=date; S.calMonth=date.slice(0,7); } }
   else { $("iText").value=""; $("iWho").value=""; $("iFu").checked=false; S.composerOpen=false; }
   render();
-  toast(id?"Changes saved":navigator.onLine?`Added to ${spaceName()}`:"Saved. It will sync when you're back online.");
+  const nN=recipients?recipients.length:0;
+  toast(id?"Changes saved":!navigator.onLine?"Saved. It will sync when you're back online.":`Added to ${spaceName()}${nN?`, ${nN} ${nN===1?"person":"people"} notified`:""}`);
 }
 
 /* ================= events ================= */
@@ -516,12 +623,17 @@ document.addEventListener("click",ev=>{
   if(b.dataset.space){ closeSheet(); if(b.dataset.space!==S.space) setSpace(b.dataset.space); if(S.view==="more") S.view="notes"; render(); return; }
   if(b.dataset.date){ goDay(b.dataset.date); return; }
   if(b.dataset.cat){ document.querySelectorAll(`[data-cat][data-p="${b.dataset.p}"]`).forEach(x=>x.setAttribute("aria-pressed",x===b?"true":"false")); if(b.dataset.p==="i") S.draft.tag=b.dataset.cat; return; }
+  if(b.dataset.ntf){ const e=b.dataset.ntf; if(S.notify.has(e)) S.notify.delete(e); else S.notify.add(e); b.setAttribute("aria-pressed",S.notify.has(e)?"true":"false"); return; }
+  if(b.dataset.alert){ openAlert(b.dataset.alert); return; }
   if(b.dataset.filter){ S.filter=S.filter===b.dataset.filter?null:b.dataset.filter; render(); return; }
   if(b.dataset.rm){ removeMember(b.dataset.rm); return; }
   if(b.id==="addBtn"){ addMember(); return; }
   const act=b.dataset.act, id=b.dataset.id; if(!act) return;
   switch(act){
     case "close": closeSheet(); break;
+    case "ntf-all": spaceMembers().filter(e=>e!==myEmail()).forEach(e=>S.notify.add(e)); document.querySelectorAll("[data-ntf]").forEach(x=>x.setAttribute("aria-pressed","true")); break;
+    case "ntf-none": S.notify.clear(); document.querySelectorAll("[data-ntf]").forEach(x=>x.setAttribute("aria-pressed","false")); break;
+    case "read-all": markAllRead(); break;
     case "confirm-ok": { const f=S.sheet&&S.sheet.onOk; closeSheet(); if(f) f(); break; }
     case "shift": goDay(addDays(S.date,Number(b.dataset.n))); break;
     case "today": goDay(todayISO()); break;
@@ -548,7 +660,9 @@ document.addEventListener("click",ev=>{
     case "make-fu": updateNote(id,{followUp:true,done:false}); closeSheet(); toast("Added to follow-ups"); break;
     case "copy": { const n=S.notes[id]; navigator.clipboard?.writeText(n.text).then(()=>toast("Copied")).catch(()=>toast("Couldn't copy on this device.")); closeSheet(); break; }
     case "delete": confirmSheet({title:"Delete this note?", body:"It will be deleted for everyone in "+spaceName()+". This can't be undone.", ok:"Delete", danger:true, onOk:()=>{ deleteNote(id); toast("Note deleted"); }}); break;
-    case "toggle-done": { const n=S.notes[id]; updateNote(id,{done:!n.done}); toast(n.done?"Moved back to follow-ups":"Marked done"); break; }
+    case "toggle-done": { const n=S.notes[id]; updateNote(id,{done:!n.done}); toast(n.done?"Moved back to follow-ups":"Marked done");
+      if(!n.done&&n.author&&n.author!==S.user.uid){ const e=S.profiles[n.author]?.email; if(e) sendAlerts([{to:e,type:"done"}],{noteId:n.id,date:n.date,text:n.text}); }
+      break; }
     case "welcome-ok": store.set("ln-welcome-"+S.user.uid,"1"); render(); break;
     case "show-welcome": store.set("ln-welcome-"+S.user.uid,""); try{ localStorage.removeItem("ln-welcome-"+S.user.uid); }catch(e){} go("notes"); break;
     case "legacy-yes": importLegacy(); break;
@@ -559,6 +673,16 @@ document.addEventListener("click",ev=>{
     case "copy-link": navigator.clipboard?.writeText(location.href.split("#")[0].replace(/index\.html$/,"")).then(()=>toast("App link copied. Paste it into WhatsApp or email.")).catch(()=>toast(location.href)); break;
     case "export": exportAll(); break;
     case "install": promptInstall(); break;
+  }
+});
+document.addEventListener("change",async ev=>{
+  if(ev.target.id==="optEmail"){ const on=ev.target.checked; fs.doc("profiles/"+S.user.uid).set({emailNotify:on},{merge:true}).then(()=>toast(on?"Email alerts on":"Email alerts off")).catch(()=>toast("Couldn't save that setting.")); }
+  if(ev.target.id==="optPopup"){
+    if(!ev.target.checked){ store.set("ln-popups-"+S.user.uid,"0"); toast("Pop-ups off on this device"); return; }
+    if(!("Notification" in window)){ ev.target.checked=false; toast("This browser doesn't support pop-up alerts."); return; }
+    const perm=await Notification.requestPermission();
+    if(perm==="granted"){ store.set("ln-popups-"+S.user.uid,"1"); toast("Pop-ups on for this device"); }
+    else { ev.target.checked=false; toast("Pop-ups are blocked. Allow notifications for this site in your browser settings."); }
   }
 });
 document.addEventListener("focusin",ev=>{ if(ev.target.id==="iText"&&!S.composerOpen){ S.composerOpen=true; $("iComp")?.classList.add("open"); } });
