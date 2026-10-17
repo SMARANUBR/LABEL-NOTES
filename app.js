@@ -46,6 +46,10 @@ const I = {
   people:'<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 19c.8-3 3.2-4.5 6-4.5s5.2 1.5 6 4.5M16 5.5a3 3 0 0 1 0 5.5M18 14.5c1.5.6 2.5 2 3 4.5"/></svg>',
   bell:'<svg viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg>',
   clip:'<svg viewBox="0 0 24 24"><path d="M20.5 11.5l-8.4 8.4a5 5 0 0 1-7.1-7.1l8.4-8.4a3.4 3.4 0 0 1 4.8 4.8l-8.4 8.4a1.7 1.7 0 0 1-2.4-2.4l7.7-7.7"/></svg>',
+  chat:'<svg viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 9.5h8M8 12.5h5"/></svg>',
+  thread:'<svg viewBox="0 0 24 24"><path d="M5 4v9a3 3 0 0 0 3 3h11"/><path d="M15 12l4 4-4 4"/><path d="M9 4h10M9 8h7"/></svg>',
+  back:'<svg viewBox="0 0 24 24" width="22" height="22" style="stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round"><path d="M15 5l-7 7 7 7"/></svg>',
+  send:'<svg viewBox="0 0 24 24" width="20" height="20" style="stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round"><path d="M4 12l16-8-6 16-2.5-6.5z"/><path d="M11.5 13.5L20 4"/></svg>',
   down:'<svg viewBox="0 0 24 24" width="16" height="16" style="stroke:currentColor;fill:none;stroke-width:2"><path d="M6 9l6 6 6-6"/></svg>'
 };
 window.addEventListener("error",ev=>{ if(/Loading|Opening/.test(root.textContent)) root.innerHTML=`<div class="gate"><div class="box"><h1><span class="rec"></span>Keep Up with UBR</h1><p>The app hit an error: <strong>${esc(ev.message)}</strong></p><p>Most often this means config.js has a typo (a missing quote mark or comma). Re-copy it from Firebase and upload it again.</p></div></div>`; });
@@ -66,9 +70,10 @@ const S = { user:null, member:false, isOwner:false, team:[], teamLoaded:false, p
   notes:{}, notesReady:false, pending:false, space:"team", projects:{}, projectsReady:false,
   view:"notes", date:todayISO(), calMonth:todayISO().slice(0,7), filter:null, mine:false, query:"", fuTab:"open",
   draft:{tag:"meeting"}, composerOpen:false, sheet:null, seenAt:"", legacy:null,
-  alerts:{}, alertsReady:false, notify:new Set() };
+  alerts:{}, alertsReady:false, notify:new Set(),
+  rooms:{}, roomsReady:false, roomsErr:null, room:null, thread:null, roomTab:"chat", msgs:[], msgsReady:false, msgsErr:null, threads:{}, sel:null, drafts:{}, stick:false };
 let unsub=[], notesUnsub=null;
-function stopAll(){ unsub.forEach(f=>{try{f();}catch(e){}}); unsub=[]; if(notesUnsub){ notesUnsub(); notesUnsub=null; } }
+function stopAll(){ if(typeof stopRoom==='function') stopRoom(); unsub.forEach(f=>{try{f();}catch(e){}}); unsub=[]; if(notesUnsub){ notesUnsub(); notesUnsub=null; } }
 const myEmail=()=>S.user.email.toLowerCase();
 const notesCol=()=>S.space==="team"?fs.collection("notes"):fs.collection("projects/"+S.space+"/notes");
 
@@ -130,7 +135,7 @@ function waitingScreen(){
   $("wOut").onclick=()=>auth.signOut();
 }
 
-auth.onAuthStateChanged(u=>{ stopAll(); Object.assign(S,{notes:{},notesReady:false,teamLoaded:false,member:false,profiles:{},legacy:null,projects:{},projectsReady:false,sheet:null}); if(!u) return authScreen(); onUser(u); });
+auth.onAuthStateChanged(u=>{ stopAll(); Object.assign(S,{notes:{},notesReady:false,teamLoaded:false,member:false,profiles:{},legacy:null,projects:{},projectsReady:false,sheet:null,rooms:{},roomsReady:false,room:null,thread:null,msgs:[],threads:{},sel:null,drafts:{},alerts:{},alertsReady:false}); if(!u) return authScreen(); onUser(u); });
 function onUser(u){
   S.user=u;
   if(!u.emailVerified) return verifyScreen(u);
@@ -168,6 +173,7 @@ function startNotebook(){
     });
     S.alertsReady=true; renderChrome(); if(S.view==="alerts") render();
   }, ()=>{ S.alertsReady=true; }));
+  watchRooms();
   checkLegacy();
 }
 function setSpace(id){
@@ -341,8 +347,7 @@ const EVERYONE=["everyone","all"];
 const rxEsc=s=>s.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
 const fullName=e=>(profileByEmail(e)?.name||e.split("@")[0]).trim();
 let MX={key:"",idx:null};
-function mentionIndex(){
-  const people=spaceMembers();
+function mentionIndex(people=spaceMembers()){
   const key=people.join(",")+"|"+people.map(fullName).join(",");
   if(MX.key===key) return MX.idx;
   const firstCount={};
@@ -355,23 +360,23 @@ function mentionIndex(){
   MX={key, idx:{handles, map, rx}}; return MX.idx;
 }
 /* every mention in a piece of text: [{start,end,emails|null(everyone)}] */
-function findMentions(text){
-  const {map,rx}=mentionIndex(); const out=[]; if(!rx||!text) return out;
+function findMentions(text,people){
+  const {map,rx}=mentionIndex(people); const out=[]; if(!rx||!text) return out;
   rx.lastIndex=0; let m;
   while((m=rx.exec(text))){ const w=m[2].toLowerCase(), start=m.index+m[1].length;
     out.push({start, end:start+1+m[2].length, emails:EVERYONE.includes(w)?null:(map[w]||[])}); }
   return out;
 }
-function mentionedEmails(text, includeSelf){
+function mentionedEmails(text, includeSelf, people){
   const set=new Set();
-  findMentions(text).forEach(x=>(x.emails||spaceMembers()).forEach(e=>set.add(e)));
+  findMentions(text,people).forEach(x=>(x.emails||people||spaceMembers()).forEach(e=>set.add(e)));
   if(!includeSelf) set.delete(myEmail());
   return [...set];
 }
 const mentionsIn=text=>mentionedEmails(text,false);
 const mentionsMe=n=>findMentions(n.text||"").some(x=>!x.emails||x.emails.includes(myEmail()));
-function noteText(text,q){
-  const ms=findMentions(text); let h="", i=0;
+function noteText(text,q,people){
+  const ms=findMentions(text,people); let h="", i=0;
   ms.forEach(x=>{ h+=highlight(text.slice(i,x.start),q);
     const me=!x.emails||x.emails.includes(myEmail());
     h+=`<span class="mention${me?" me":""}" title="${esc(x.emails?x.emails.map(emailName).join(", "):"Everyone here")}">${highlight(text.slice(x.start,x.end),q)}</span>`; i=x.end; });
@@ -396,16 +401,17 @@ function mentionQuery(ta){
 function closeMentions(){ if(MP.el){ MP.el.remove(); MP.el=null; } MP.ta=null; MP.list=[]; }
 function updateMentions(ta){
   const mq=mentionQuery(ta); if(!mq){ closeMentions(); return; }
-  const {handles}=mentionIndex(), q=mq.q;
+  const inRoom=ta.dataset.room, people=inRoom?(S.rooms[inRoom]?.members||[]):spaceMembers();
+  const {handles}=mentionIndex(people), q=mq.q;
   const hit=h=>!q||h.name.toLowerCase().split(/\s+/).some(w=>w.startsWith(q))||h.name.toLowerCase().startsWith(q)||h.email.toLowerCase().startsWith(q);
   const list=handles.filter(h=>h.email!==myEmail()&&hit(h)).slice(0,6).map(h=>({...h, kind:"person"}));
-  if(handles.length>1&&(!q||"everyone".startsWith(q)||"all".startsWith(q))) list.push({kind:"all", handle:"everyone", name:S.space==="team"?"Everyone":"Everyone in this project", email:""});
+  if(handles.length>1&&(!q||"everyone".startsWith(q)||"all".startsWith(q))) list.push({kind:"all", handle:"everyone", name:inRoom?"Everyone in this chat":S.space==="team"?"Everyone":"Everyone in this project", email:""});
   if(!list.length){ closeMentions(); return; }
   const same=MP.ta===ta&&MP.at===mq.at; MP.ta=ta; MP.at=mq.at; MP.list=list; MP.sel=same?Math.min(MP.sel,list.length-1):0;
   if(!MP.el){ MP.el=document.createElement("div"); MP.el.className="mention-pop"; MP.el.setAttribute("role","listbox"); MP.el.id="mentionPop"; document.body.appendChild(MP.el); }
   MP.el.innerHTML=`<div class="mp-h">Mention someone</div>`+list.map((h,i)=>`<div class="mp-o" role="option" id="mpo${i}" data-mi="${i}" aria-selected="${i===MP.sel}">
     ${h.kind==="all"?`<span class="av" style="width:26px;height:26px;font-size:13px;background:var(--ink)" aria-hidden="true">@</span>`:avatarEmail(h.email).replace(/width:18px;height:18px;font-size:10px/,"width:26px;height:26px;font-size:12px")}
-    <span class="mp-t"><b>${esc(h.name)}</b><small>${h.kind==="all"?"Pings everyone who can see this notebook":esc(h.email)}</small></span></div>`).join("");
+    <span class="mp-t"><b>${esc(h.name)}</b><small>${h.kind==="all"?(inRoom?"Pings everyone in this chat":"Pings everyone who can see this notebook"):esc(h.email)}</small></span></div>`).join("");
   ta.setAttribute("aria-controls","mentionPop"); ta.setAttribute("aria-activedescendant","mpo"+MP.sel);
   const c=caretXY(ta,mq.at), vw=window.visualViewport?.width||innerWidth, vh=window.visualViewport?.height||innerHeight;
   const w=Math.min(300,vw-24); MP.el.style.width=w+"px";
@@ -418,7 +424,7 @@ function pickMention(i){
   const pos=ta.selectionStart, ins="@"+h.handle+" ";
   ta.value=ta.value.slice(0,MP.at)+ins+ta.value.slice(pos);
   const c=MP.at+ins.length; ta.focus(); ta.setSelectionRange(c,c); closeMentions();
-  if(h.kind==="person"&&S.notify&&!S.sheet?.id){ S.notify.add(h.email); document.querySelectorAll(`[data-ntf="${CSS.escape(h.email)}"]`).forEach(x=>x.setAttribute("aria-pressed","true")); }
+  if(h.kind==="person"&&!ta.dataset.room&&S.notify&&!S.sheet?.id){ S.notify.add(h.email); document.querySelectorAll(`[data-ntf="${CSS.escape(h.email)}"]`).forEach(x=>x.setAttribute("aria-pressed","true")); }
 }
 function insertAt(p){
   const ta=$(p+"Text"); if(!ta) return; ta.focus();
@@ -439,6 +445,8 @@ const unreadCount=()=>Object.values(S.alerts).filter(a=>!a.read).length;
 function alertLine(a){
   const who=`<strong>${esc(a.fromName||"Someone")}</strong>`, where=`<strong>${esc(a.spaceName||"a notebook")}</strong>`;
   if(a.type==="mention") return `${who} mentioned you in ${where}`;
+  if(a.type==="chat-mention") return `${who} mentioned you in ${where}`;
+  if(a.type==="chat") return `${who} sent you a private message`;
   if(a.type==="done") return `${who} marked your follow-up done in ${where}`;
   return `${who} added a note in ${where}`;
 }
@@ -455,6 +463,7 @@ function announce(a){
 function openAlert(id){
   const a=S.alerts[id]; if(!a) return;
   if(!a.read) fs.doc("notifications/"+id).update({read:true}).catch(()=>{});
+  if(a.space==="chat"||String(a.type).startsWith("chat")){ if(!S.rooms[a.room]){ toast(S.roomsReady?"You're no longer in that chat.":"Chats are still loading. Try again in a moment."); return; } openRoom(a.room, a.thread||null); return; }
   if(a.space!=="team"&&!S.projects[a.space]){ toast("You no longer have access to that project."); return; }
   if(a.space!==S.space) setSpace(a.space);
   goDay(a.date||todayISO());
@@ -519,6 +528,321 @@ function deleteProject(id){ const p=S.projects[id]; if(!p) return;
     onOk:async()=>{ try{ const snap=await fs.collection("projects/"+id+"/notes").get(); let b=fs.batch(), n=0;
       for(const d of snap.docs){ b.delete(d.ref); if(++n%400===0){ await b.commit(); b=fs.batch(); } } await b.commit(); await fs.doc("projects/"+id).delete(); setSpace("team"); toast(`Deleted "${p.name}".`); }catch(e){ toast("Couldn't delete the project."); } } }); }
 
+/* ================= chat ================= */
+const CH={msgUnsub:null, thrUnsub:null, seenTimers:{}};
+const FV=()=>firebase.firestore.FieldValue;
+const roomRef=id=>fs.collection("rooms").doc(id);
+const roomOther=r=>(r.members||[]).find(e=>e!==myEmail())||myEmail();
+const roomName=r=>!r?"Chat":r.type==="dm"?emailName(roomOther(r)).replace(/^You$/,"Just you"):(r.name||"Group");
+const roomUnread=r=>!!(r&&r.last&&r.last.from!==S.user.uid&&(r.last.at||"")>((r.seen||{})[S.user.uid]||""));
+const chatUnread=()=>Object.values(S.rooms).filter(roomUnread).length;
+const roomList=()=>Object.values(S.rooms).sort((a,b)=>(b.updatedAt||b.createdAt||"").localeCompare(a.updatedAt||a.createdAt||""));
+const uidByEmail=e=>{ const k=Object.keys(S.profiles).find(u=>S.profiles[u].email===e); return k||null; };
+const canManageRoom=r=>r&&(r.createdBy===S.user.uid||S.isOwner);
+const draftKey=()=>S.room+"/"+(S.thread||"");
+function stamp(t){ if(!t) return ""; const d=iso(new Date(t)); return d===todayISO()?fmtTime(t):relDay(d)||fmtShort(d); }
+function roomAvatar(r,size=40){
+  const st=`width:${size}px;height:${size}px;font-size:${Math.round(size*.42)}px`;
+  if(r.type==="dm"){ const e=roomOther(r), n=fullName(e); return `<span class="av" style="${st};background:${colorFor(uidByEmail(e)||e)}" aria-hidden="true">${esc((n[0]||"?").toUpperCase())}</span>`; }
+  return `<span class="av room-av" style="${st};background:${colorFor(r.id)}" aria-hidden="true">#</span>`;
+}
+function watchRooms(){
+  unsub.push(fs.collection("rooms").where("members","array-contains",myEmail()).onSnapshot(snap=>{
+    const first=!S.roomsReady;
+    snap.docChanges().forEach(ch=>{ const v={id:ch.doc.id,...ch.doc.data()};
+      if(ch.type==="removed"){ delete S.rooms[v.id]; return; }
+      const old=S.rooms[v.id]; S.rooms[v.id]=v;
+      const looking=S.view==="chat"&&S.room===v.id&&document.visibilityState==="visible";
+      if(!first&&v.last&&v.last.from!==S.user.uid&&(!old||!old.last||old.last.at!==v.last.at)&&!looking) announceChat(v);
+    });
+    S.roomsReady=true; S.roomsErr=null;
+    if(S.room&&!S.rooms[S.room]){ toast("That chat was deleted or you were removed from it."); leaveRoomView(); }
+    renderChrome(); if(S.view==="chat"){ render(); markSeen(); }
+  }, e=>{ S.roomsReady=true; S.roomsErr=e.code||"unknown"; if(S.view==="chat") render(); }));
+}
+function announceChat(r){
+  const who=r.last.fromName||"Someone", where=r.type==="dm"?"":` in ${roomName(r)}`;
+  const plain=`${who}${where}${r.last.thread?` (thread: ${r.last.thread})`:""}`;
+  toast(`${plain}: ${r.last.text||""}`.slice(0,140));
+  if(store.get("ln-popups-"+S.user.uid)==="1"&&"Notification" in window&&Notification.permission==="granted"){
+    const opts={body:r.last.text||"", icon:"icon-192.png", tag:"room-"+r.id};
+    if(navigator.serviceWorker&&navigator.serviceWorker.controller) navigator.serviceWorker.ready.then(x=>x.showNotification(plain,opts)).catch(()=>{});
+    else { try{ new Notification(plain,opts); }catch(e){} }
+  }
+}
+function stopRoom(){ ["msgUnsub","thrUnsub"].forEach(k=>{ if(CH[k]){ try{CH[k]();}catch(e){} CH[k]=null; } }); }
+function leaveRoomView(){ stopRoom(); S.room=null; S.thread=null; S.msgs=[]; S.threads={}; S.sel=null; closeMentions(); }
+function openRoom(id, thread=null){
+  if(!S.rooms[id]){ toast("You're not in that chat any more."); return; }
+  closeSheet(); const sameRoom=S.room===id;
+  S.view="chat"; S.room=id; S.thread=thread; S.roomTab=thread?"threads":"chat"; S.sel=null; S.stick=true;
+  S.msgs=[]; S.msgsReady=false; S.msgsErr=null; if(!sameRoom) S.threads={};
+  subRoom(); render(); markSeen();
+  if(!isPhone()) setTimeout(()=>$("chatText")?.focus(),30);
+}
+function subRoom(){
+  stopRoom(); const id=S.room; if(!id) return;
+  const key=draftKey(), base=roomRef(id);
+  const col=S.thread?base.collection("threads").doc(S.thread).collection("messages"):base.collection("messages");
+  CH.msgUnsub=col.orderBy("at").limitToLast(400).onSnapshot(snap=>{ if(key!==draftKey()) return;
+    S.msgs=snap.docs.map(d=>({id:d.id,...d.data()})); S.msgsReady=true; S.msgsErr=null; render(); markSeen(); },
+    e=>{ if(key!==draftKey()) return; S.msgsReady=true; S.msgsErr=e.code||"unknown"; render(); });
+  CH.thrUnsub=base.collection("threads").orderBy("updatedAt","desc").limit(200).onSnapshot(snap=>{ if(id!==S.room) return;
+    S.threads={}; snap.docs.forEach(d=>S.threads[d.id]={id:d.id,...d.data()});
+    if(S.thread&&!S.threads[S.thread]&&!snap.metadata?.hasPendingWrites&&S.msgsReady){ toast("That thread was deleted."); S.thread=null; S.roomTab="threads"; subRoom(); }
+    if(S.view==="chat") render(); }, ()=>{});
+}
+function markSeen(){
+  const r=S.rooms[S.room]; if(!r||S.view!=="chat"||document.visibilityState!=="visible") return;
+  const at=r.last?.at||""; if(!at||((r.seen||{})[S.user.uid]||"")>=at) return;
+  const id=r.id; clearTimeout(CH.seenTimers[id]); CH.seenTimers[id]=setTimeout(()=>{ delete CH.seenTimers[id]; roomRef(id).update({["seen."+S.user.uid]:nowISO()}).catch(()=>{}); },350);
+}
+document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="visible"&&S.user) markSeen(); });
+
+function sendChat(){
+  const ta=$("chatText"); if(!ta) return; const text=ta.value.trim(); const r=S.rooms[S.room];
+  if(!text||!r) { ta.focus(); return; }
+  const prev=r.last, at=nowISO(), me=S.user.displayName||S.user.email, base=roomRef(r.id), th=S.thread?S.threads[S.thread]:null;
+  const ref=(th?base.collection("threads").doc(th.id).collection("messages"):base.collection("messages")).doc();
+  ref.set({text, from:S.user.uid, fromName:me, at}).catch(e=>toast(e&&e.code==="permission-denied"?"Chat isn't switched on yet. The owner needs to add the chat rules in Firebase.":"Couldn't send. It will retry when you're back online."));
+  const last={text:text.slice(0,200), from:S.user.uid, fromName:me, at, thread:th?th.title:""};
+  base.update({last, updatedAt:at, ["seen."+S.user.uid]:at}).catch(()=>{});
+  if(th) base.collection("threads").doc(th.id).update({count:FV().increment(1), updatedAt:at, last}).catch(()=>{});
+  // pings: @mentions always; private chats ping once per unread burst
+  const mentioned=mentionedEmails(text,false,r.members);
+  const alerts=mentioned.map(e=>({to:e,type:"chat-mention"}));
+  if(r.type==="dm"){ const other=roomOther(r), ou=uidByEmail(other);
+    const burst=!prev||prev.from!==S.user.uid||!ou||((r.seen||{})[ou]||"")>=(prev.at||"");
+    if(other!==myEmail()&&!mentioned.includes(other)&&burst) alerts.push({to:other,type:"chat"}); }
+  if(alerts.length) sendChatAlerts(r, alerts, text, ref.id);
+  ta.value=""; delete S.drafts[draftKey()]; grow(ta); closeMentions(); S.stick=true; ta.focus();
+  if(!navigator.onLine) toast("Sent. It will deliver when you're back online.");
+}
+function sendChatAlerts(r, list, text, msgId){
+  const b=fs.batch(), when=nowISO(), from=S.user.displayName||S.user.email;
+  list.forEach(x=>{ if(!x.to||x.to===myEmail()) return;
+    b.set(fs.collection("notifications").doc(), { to:x.to, type:x.type, from:S.user.uid, fromName:from,
+      space:"chat", spaceName:r.type==="dm"?"a private chat":(r.name||"a group"), noteId:msgId, date:todayISO(), text:String(text).slice(0,280),
+      createdAt:when, read:false, emailed:false, sendEmail:profileByEmail(x.to)?.emailNotify!==false,
+      appUrl:location.href.split("#")[0].split("?")[0], room:r.id, thread:S.thread||"" }); });
+  b.commit().catch(()=>{});
+}
+function grow(ta){ if(!ta) return; ta.style.height="auto"; ta.style.height=Math.min(ta.scrollHeight,180)+"px"; }
+
+/* rooms: create, edit, leave, delete */
+function startDM(email){
+  const pair=[myEmail(),email].sort(), id="dm_"+pair.join("_").replace(/\//g,"_");
+  if(S.rooms[id]){ openRoom(id); return; }
+  const at=nowISO(), r={type:"dm", members:[...new Set(pair)], createdBy:S.user.uid, createdAt:at, updatedAt:at};
+  roomRef(id).set(r,{merge:true}).catch(e=>{ toast(e&&e.code==="permission-denied"?"Chat isn't switched on yet. The owner needs to add the chat rules in Firebase.":"Couldn't start the chat."); delete S.rooms[id]; if(S.room===id){ leaveRoomView(); render(); } });
+  S.rooms[id]={id,...r}; openRoom(id);
+}
+function saveRoom(id){
+  const name=$("rmName").value.trim(); if(!name){ $("rmName").focus(); toast("Give the room a name."); return; }
+  const members=[...new Set([myEmail(),...[...document.querySelectorAll("[data-rmm]:checked")].map(x=>x.value)])];
+  if(!id&&members.length<2){ toast("Pick at least one other person."); return; }
+  const at=nowISO();
+  if(id){ roomRef(id).update({name,members,updatedAt:at}).catch(fail); closeSheet(); toast("Room updated"); render(); return; }
+  const ref=fs.collection("rooms").doc(), r={type:"group", name, members, createdBy:S.user.uid, createdAt:at, updatedAt:at};
+  ref.set(r).catch(e=>{ toast(e&&e.code==="permission-denied"?"Chat isn't switched on yet. The owner needs to add the chat rules in Firebase.":"Couldn't create the room."); delete S.rooms[ref.id]; if(S.room===ref.id){ leaveRoomView(); render(); } });
+  S.rooms[ref.id]={id:ref.id,...r}; openRoom(ref.id); toast(`Created ${name}. Only its members can see it.`);
+}
+function leaveRoom(id){ const r=S.rooms[id]; if(!r) return;
+  confirmSheet({title:`Leave ${roomName(r)}?`, body:"You won't see its messages any more unless someone adds you back.", ok:"Leave room", danger:true,
+    onOk:()=>{ roomRef(id).update({members:FV().arrayRemove(myEmail())}).catch(fail); delete S.rooms[id]; leaveRoomView(); S.view="chat"; render(); toast("You left the room."); } }); }
+async function wipe(col){ const snap=await col.get(); let b=fs.batch(), n=0; for(const d of snap.docs){ b.delete(d.ref); if(++n%400===0){ await b.commit(); b=fs.batch(); } } await b.commit(); }
+function deleteRoom(id){ const r=S.rooms[id]; if(!r) return;
+  confirmSheet({title:`Delete ${roomName(r)}?`, body:"This deletes the chat, its threads and every message for everyone. It can't be undone.", ok:"Delete", danger:true,
+    onOk:async()=>{ try{ const base=roomRef(id); const th=await base.collection("threads").get();
+      for(const t of th.docs) await wipe(t.ref.collection("messages")); await wipe(base.collection("threads")); await wipe(base.collection("messages"));
+      await base.delete(); delete S.rooms[id]; leaveRoomView(); render(); toast("Deleted."); }catch(e){ toast("Couldn't delete it. Only the person who made it (or the owner) can."); } } }); }
+
+/* threads */
+function openThread(tid){ S.thread=tid; S.roomTab="threads"; S.sel=null; S.msgs=[]; S.msgsReady=false; S.stick=true; subRoom(); render(); if(!isPhone()) setTimeout(()=>$("chatText")?.focus(),30); }
+function threadsBack(){ S.thread=null; S.roomTab="threads"; S.msgs=[]; S.msgsReady=false; subRoom(); render(); }
+function roomTab(t){ if(S.roomTab===t&&!S.thread) return; S.roomTab=t; S.sel=null; if(S.thread||t==="chat"){ S.thread=null; S.msgs=[]; S.msgsReady=false; S.stick=true; subRoom(); } render(); }
+function saveToThread(tid, ids){
+  const r=S.rooms[S.room]; if(!r) return;
+  const base=roomRef(r.id), at=nowISO(), me=S.user.displayName||S.user.email;
+  const msgs=(ids||[]).map(id=>S.msgs.find(m=>m.id===id)).filter(Boolean).sort((a,b)=>(a.at||"").localeCompare(b.at||""));
+  let ref, title;
+  const b=fs.batch();
+  if(!tid){ title=$("thTitle").value.trim(); if(!title){ $("thTitle").focus(); toast("Give the thread a name."); return; }
+    ref=base.collection("threads").doc();
+    const lm=msgs[msgs.length-1];
+    b.set(ref,{title, createdBy:S.user.uid, createdByName:me, createdAt:at, updatedAt:at, count:msgs.length, last:lm?{text:lm.text.slice(0,200),from:lm.from,fromName:lm.fromName,at}:null});
+    S.threads[ref.id]={id:ref.id,title,createdBy:S.user.uid,createdAt:at,updatedAt:at,count:msgs.length};
+  } else { ref=base.collection("threads").doc(tid); title=S.threads[tid]?.title||"thread";
+    if(msgs.length) b.update(ref,{count:FV().increment(msgs.length), updatedAt:at}); }
+  msgs.forEach(m=>b.set(ref.collection("messages").doc(),{text:m.text, from:m.from, fromName:m.fromName, at:m.at, saved:true, savedBy:S.user.uid, savedByName:me, savedAt:at}));
+  b.commit().catch(e=>toast(e&&e.code==="permission-denied"?"Chat isn't switched on yet. The owner needs to add the chat rules in Firebase.":"Couldn't save to the thread."));
+  closeSheet(); S.sel=null;
+  toast(msgs.length?`Saved ${msgs.length} ${msgs.length===1?"message":"messages"} to "${title}"`:`Started "${title}"`);
+  openThread(ref.id);
+}
+function renameThread(tid){ const t=S.threads[tid]; const v=$("thRename")?.value.trim(); if(!t||!v) return;
+  roomRef(S.room).collection("threads").doc(tid).update({title:v}).catch(fail); t.title=v; closeSheet(); render(); }
+function deleteThread(tid){ const t=S.threads[tid]; if(!t) return;
+  confirmSheet({title:`Delete "${t.title}"?`, body:"This deletes the thread and its messages for everyone. Messages that are also in the main chat stay there.", ok:"Delete thread", danger:true,
+    onOk:async()=>{ try{ const ref=roomRef(S.room).collection("threads").doc(tid); await wipe(ref.collection("messages")); await ref.delete(); delete S.threads[tid]; threadsBack(); toast("Thread deleted."); }catch(e){ fail(e); } } }); }
+
+/* views */
+function roomRow(r){
+  const L=r.last, un=roomUnread(r);
+  const pre=!L?"":L.from===S.user.uid?"You: ":r.type==="group"?`${(L.fromName||"").split(" ")[0]}: `:"";
+  return `<button class="room-row ${S.room===r.id?"on":""} ${un?"unread":""}" data-room="${r.id}" aria-current="${S.room===r.id}">
+    ${roomAvatar(r,42)}
+    <span class="rr-main"><span class="rr-top"><b>${esc(roomName(r))}</b>${r.type==="group"?`<span class="rr-n">${r.members.length}</span>`:""}<span class="rr-t">${esc(stamp(L?.at||r.createdAt))}</span></span>
+    <span class="rr-last">${L?`${esc(pre)}${L.thread?`<i>${esc(L.thread)}</i> · `:""}${esc(L.text)}`:`<em>${r.type==="dm"?"Say hello":"No messages yet"}</em>`}</span></span>
+    ${un?`<span class="dot" aria-label="Unread"></span>`:""}</button>`;
+}
+function msgsHTML(r){
+  if(!S.msgsReady) return `<div class="chat-empty"><span class="spin"></span></div>`;
+  if(S.msgsErr) return `<div class="chat-empty"><strong>${S.msgsErr==="permission-denied"?"Chat isn't switched on yet":"Couldn't load messages"}</strong>${S.msgsErr==="permission-denied"?"The owner needs to add the chat rules in Firebase.":"Check your connection and try again."}</div>`;
+  if(!S.msgs.length) return `<div class="chat-empty">${roomAvatar(r,56)}<strong>${S.thread?"Nothing in this thread yet":r.type==="dm"?`This is the start of your chat with ${esc(roomName(r))}`:`Welcome to ${esc(roomName(r))}`}</strong>${S.thread?"Write the first message below.":r.type==="dm"?"Only the two of you can see it.":`Only the ${r.members.length} people in this room can see it. Type @ to ping someone.`}</div>`;
+  let h="", prevDay="", prev=null; const sel=S.sel;
+  S.msgs.forEach(m=>{
+    const day=iso(new Date(m.at||Date.now()));
+    if(day!==prevDay){ h+=`<div class="day-sep"><span>${esc(relDay(day)||fmtLong(day))}</span></div>`; prevDay=day; prev=null; }
+    const mine=m.from===S.user.uid&&!m.saved;
+    const cont=prev&&prev.from===m.from&&!!prev.saved===!!m.saved&&(new Date(m.at)-new Date(prev.at))<5*60000;
+    const picked=sel&&sel.has(m.id);
+    h+=`<div class="msg ${mine?"mine":""} ${cont?"cont":""} ${picked?"picked":""} ${sel?"selecting":""}" data-msg="${m.id}">
+      ${sel?`<span class="pick" aria-hidden="true">${picked?"✓":""}</span>`:""}
+      ${mine?"":cont?`<span class="av-sp"></span>`:avatar(m.from)}
+      <div class="bub-wrap">
+        ${!mine&&!cont?`<div class="m-name">${esc(m.from===S.user.uid?"You":m.fromName||"Someone")}</div>`:""}
+        <button class="bub" data-act="msg" data-id="${m.id}" aria-label="Message from ${esc(m.fromName||"")}, options"${sel?` aria-pressed="${!!picked}"`:""}>${m.saved?`<span class="saved-tag">Saved from chat by ${esc(m.savedBy===S.user.uid?"you":(m.savedByName||"someone").split(" ")[0])}</span>`:""}${noteText(m.text||"",null,r.members)}</button>
+        <div class="m-time">${esc(m.saved?stamp(m.at):fmtTime(m.at))}</div>
+      </div></div>`;
+    prev=m;
+  });
+  return h;
+}
+function threadsHTML(r){
+  const list=Object.values(S.threads).sort((a,b)=>(b.updatedAt||"").localeCompare(a.updatedAt||""));
+  return `<div class="thr-wrap"><div class="thr-intro"><p class="hint" style="margin:0">Threads keep specific conversations together, like one song's mix notes or a contract back-and-forth. Save messages from the chat into a thread, or start a new one.</p>
+    <button class="btn primary" data-act="new-thread">${I.plus.replace('<svg','<svg width="18" height="18" style="stroke:currentColor;fill:none;stroke-width:2.2;vertical-align:-3px;margin-right:4px"')}New thread</button></div>
+    ${list.length?`<div class="thr-list">${list.map(t=>`<button class="thr-row" data-act="open-thread" data-id="${t.id}">
+      <span class="thr-ic" aria-hidden="true">${I.thread}</span>
+      <span class="rr-main"><span class="rr-top"><b>${esc(t.title)}</b><span class="rr-t">${esc(stamp(t.updatedAt))}</span></span>
+      <span class="rr-last">${t.count||0} ${t.count===1?"message":"messages"}${t.last?` · ${esc((t.last.fromName||"").split(" ")[0])}: ${esc(t.last.text)}`:""}</span></span></button>`).join("")}</div>`
+      :`<div class="chat-empty" style="padding:40px 16px"><strong>No threads yet</strong>Tap any message in the chat and choose "Save to a thread".</div>`}</div>`;
+}
+function viewChat(){
+  const r=S.room?S.rooms[S.room]:null, rooms=roomList();
+  const listPane=`<aside class="rooms" aria-label="Chats">
+    <div class="rooms-head"><h1 class="page-title" style="margin:0">Chat</h1><button class="btn primary" data-act="new-chat">${I.plus.replace('<svg','<svg width="18" height="18" style="stroke:currentColor;fill:none;stroke-width:2.2;vertical-align:-3px;margin-right:4px"')}New</button></div>
+    ${!S.roomsReady?`<div class="chat-empty"><span class="spin"></span></div>`
+      :S.roomsErr?`<div class="chat-empty"><strong>${S.roomsErr==="permission-denied"?"Chat isn't switched on yet":"Couldn't load chats"}</strong>${S.roomsErr==="permission-denied"?(S.isOwner?"Add the chat rules in Firebase (see CHAT-SETUP.md), then reload.":"Ask the notebook owner to switch chat on."):"Check your connection and reload."}</div>`
+      :rooms.length?`<div class="room-list">${rooms.map(roomRow).join("")}</div>`
+      :`<div class="chat-empty" style="padding:36px 12px"><strong>No chats yet</strong>Start a private chat with one person, or a group room for a release, an artist or a team.<button class="btn primary" data-act="new-chat" style="margin-top:14px">Start a chat</button></div>`}
+  </aside>`;
+  if(!r) return `<div class="chat">${listPane}<section class="convo none"><div class="chat-empty">${I.chat.replace('<svg','<svg width="44" height="44" style="stroke:var(--ink-2);fill:none;stroke-width:1.5"')}<strong>Pick a chat</strong>Or start a new one. Private chats and group rooms are only visible to the people in them.</div></section></div>`;
+  const th=S.thread?S.threads[S.thread]:null;
+  const sub=r.type==="dm"?`Private · ${esc(roomOther(r))}`:`${r.members.length} people · ${esc(r.members.map(e=>emailName(e).split(" ")[0]).join(", "))}`;
+  const showMsgs=S.roomTab==="chat"||S.thread;
+  const thN=Object.keys(S.threads).length;
+  const head=`<header class="convo-head">
+      <button class="icon-btn back" data-act="rooms-back" aria-label="All chats">${I.back}</button>
+      ${roomAvatar(r,38)}
+      <div class="ch-t"><h2>${esc(roomName(r))}</h2><p>${sub}</p></div>
+      <button class="icon-btn" data-act="room-info" aria-label="Chat details">${I.people.replace('<svg','<svg width="20" height="20" style="stroke:currentColor;fill:none;stroke-width:1.8"')}</button>
+    </header>
+    <div class="convo-tabs" role="tablist"><button role="tab" data-act="room-tab" data-tab="chat" aria-selected="${S.roomTab==="chat"}">Chat</button><button role="tab" data-act="room-tab" data-tab="threads" aria-selected="${S.roomTab==="threads"}">Threads${thN?` <span class="tcount">${thN}</span>`:""}</button></div>
+    ${th?`<div class="thr-bar"><button class="link" data-act="threads-back">${I.back.replace('<svg','<svg width="16" height="16" style="stroke:currentColor;fill:none;stroke-width:2;vertical-align:-3px"')} Threads</button><b>${esc(th.title)}</b><button class="icon-btn sm" data-act="thread-menu" aria-label="Thread options">⋯</button></div>`:""}`;
+  const comp=S.sel?`<div class="sel-bar"><span><b>${S.sel.size}</b> selected</span><button class="btn" data-act="sel-cancel">Cancel</button><button class="btn primary" data-act="sel-save" ${S.sel.size?"":"disabled"}>Save to a thread</button></div>`
+    :`<div class="chat-comp"><button class="icon-btn at" data-act="mention" data-p="chat" aria-label="Mention someone">@</button>
+      <label class="sr" for="chatText">Message</label><textarea id="chatText" data-room="${r.id}" rows="1" placeholder="${th?`Reply in ${esc(th.title)}…`:`Message ${esc(roomName(r))}…`}">${esc(S.drafts[draftKey()]||"")}</textarea>
+      <button class="btn primary send" data-act="send-chat" aria-label="Send">${I.send}</button></div>`;
+  return `<div class="chat has-room">${listPane}<section class="convo">${head}
+    ${showMsgs?`<div class="msgs" id="msgs">${msgsHTML(r)}</div>${comp}`:threadsHTML(r)}</section></div>`;
+}
+function newChatHTML(sh){
+  const others=teamEmails().filter(e=>e!==myEmail());
+  const seg=`<div class="seg" role="tablist"><button role="tab" data-act="nc-mode" data-mode="dm" aria-selected="${sh.mode!=="group"}">Private chat</button><button role="tab" data-act="nc-mode" data-mode="group" aria-selected="${sh.mode==="group"}">Group room</button></div>`;
+  if(sh.mode!=="group") return `<h2>New chat</h2>${seg}<p class="sub">Just you and one person. Nobody else can see it.</p>
+    ${others.length?`<div class="menu-list">${others.map(e=>`<button data-act="start-dm" data-email="${esc(e)}">${avatarEmail(e).replace(/width:18px;height:18px;font-size:10px/,"width:32px;height:32px;font-size:14px")}<span>${esc(emailName(e))}<small>${esc(e)}</small></span></button>`).join("")}</div>`:`<p class="hint">Add people to the team first (Settings → Team members).</p>`}
+    <div class="actions"><button class="btn" data-act="close">Cancel</button></div>`;
+  return `<h2>New chat</h2>${seg}${roomFormHTML(null)}`;
+}
+function roomFormHTML(r){
+  const current=new Set(r?r.members:[myEmail()]), people=[...new Set([...teamEmails(),...(r?r.members:[])])];
+  return `<p class="sub">${r?"Change the name or who's in it.":"A private room for a few people, like one release or one artist. Only the people you tick can see it."}</p>
+    <label class="label" for="rmName">Room name</label><input class="input" id="rmName" value="${esc(r?r.name:"")}" placeholder="e.g. Ve Mahiya release">
+    <span class="label">Who's in it</span>
+    <div class="people">${people.map(e=>{ const me=e===myEmail(); return `<label class="person-row"><input type="checkbox" data-rmm value="${esc(e)}" ${current.has(e)||me?"checked":""} ${me?"disabled":""}><span>${esc(emailName(e))}${emailName(e)!==e?`<br><span class="hint">${esc(e)}</span>`:""}</span></label>`; }).join("")}</div>
+    <div class="actions">${r?`<button class="btn danger" data-act="delete-room" data-id="${r.id}" style="margin-right:auto">Delete</button>`:""}<button class="btn" data-act="close">Cancel</button><button class="btn primary" data-act="save-room" ${r?`data-id="${r.id}"`:""}>${r?"Save changes":"Create room"}</button></div>`;
+}
+function roomInfoHTML(){
+  const r=S.rooms[S.room]; if(!r) return "";
+  if(r.type==="group"&&canManageRoom(r)) return `<h2>${esc(roomName(r))}</h2>${roomFormHTML(r)}`;
+  return `<h2>${esc(roomName(r))}</h2><p class="sub">${r.type==="dm"?"A private chat. Only the two of you can see it.":"Only these people can see this room."}</p>
+    <ul class="members">${r.members.map(e=>`<li><span class="who">${avatarEmail(e)}<span>${esc(emailName(e))}${emailName(e)!==e?`<br><span class="hint">${esc(e)}</span>`:""}</span></span></li>`).join("")}</ul>
+    ${r.type==="group"?`<p class="hint">Only the person who made the room (or the owner) can change who's in it.</p>`:""}
+    <div class="actions">${r.type==="group"?`<button class="btn danger" data-act="leave-room" data-id="${r.id}" style="margin-right:auto">Leave room</button>`:canManageRoom(r)?`<button class="btn danger" data-act="delete-room" data-id="${r.id}" style="margin-right:auto">Delete chat</button>`:""}<button class="btn primary" data-act="close">Done</button></div>`;
+}
+function msgMenuHTML(sh){
+  const m=S.msgs.find(x=>x.id===sh.id); if(!m) return "";
+  return `<h2>Message</h2><p class="sub">${esc(m.fromName||"")} · ${esc(stamp(m.at))}<br>${esc((m.text||"").slice(0,140))}${(m.text||"").length>140?"…":""}</p><div class="menu-list">
+    ${S.thread?"":`<button data-act="msg-thread" data-id="${m.id}">${I.thread}<span>Save to a thread<small>Start a new thread with it, or add it to one</small></span></button>
+    <button data-act="msg-select" data-id="${m.id}">${I.fu}<span>Select more messages<small>Save a whole conversation to a thread</small></span></button>`}
+    <button data-act="msg-copy" data-id="${m.id}">${I.copy}<span>Copy text</span></button>
+    ${m.from===S.user.uid||(S.thread&&m.savedBy===S.user.uid)?`<button class="danger" data-act="msg-delete" data-id="${m.id}">${I.trash}<span>Delete${m.saved?" from this thread":""}</span></button>`:""}</div>`;
+}
+function saveThreadHTML(sh){
+  const n=(sh.ids||[]).length, list=Object.values(S.threads).sort((a,b)=>(b.updatedAt||"").localeCompare(a.updatedAt||""));
+  const first=n?S.msgs.find(m=>m.id===sh.ids[0]):null;
+  const guess=first?(first.text||"").replace(/\s+/g," ").trim().slice(0,48):"";
+  return `<h2>${n?"Save to a thread":"New thread"}</h2><p class="sub">${n?`${n} ${n===1?"message":"messages"} will be copied into the thread. ${n===1?"It stays":"They stay"} in the chat too.`:"A place for one specific conversation in this room."}</p>
+    <label class="label" for="thTitle">${n&&list.length?"New thread":"Thread name"}</label>
+    <div style="display:flex;gap:8px"><input class="input" id="thTitle" value="${esc(guess)}" placeholder="e.g. Ve Mahiya mix notes"><button class="btn primary" data-act="thread-create">${n?"Save":"Create"}</button></div>
+    ${n&&list.length?`<span class="label" style="margin-top:16px">Or add to an existing thread</span><div class="menu-list">${list.map(t=>`<button data-act="thread-add" data-id="${t.id}"><span class="thr-ic" aria-hidden="true">${I.thread}</span><span>${esc(t.title)}<small>${t.count||0} ${t.count===1?"message":"messages"}</small></span></button>`).join("")}</div>`:""}
+    <div class="actions"><button class="btn" data-act="close">Cancel</button></div>`;
+}
+function threadMenuHTML(){
+  const t=S.threads[S.thread]; if(!t) return "";
+  const can=t.createdBy===S.user.uid||S.isOwner||canManageRoom(S.rooms[S.room]);
+  return `<h2>${esc(t.title)}</h2><p class="sub">Started by ${esc(t.createdBy===S.user.uid?"you":t.createdByName||"someone")} · ${esc(stamp(t.createdAt))}</p>
+    ${can?`<label class="label" for="thRename">Rename</label><div style="display:flex;gap:8px"><input class="input" id="thRename" value="${esc(t.title)}"><button class="btn primary" data-act="thread-rename">Save</button></div>
+    <div class="actions"><button class="btn danger" data-act="thread-delete" style="margin-right:auto">Delete thread</button><button class="btn" data-act="close">Close</button></div>`
+    :`<p class="hint">Only the person who started the thread can rename or delete it.</p><div class="actions"><button class="btn primary" data-act="close">Close</button></div>`}`;
+}
+function chatClick(act,b){
+  const id=b.dataset.id;
+  switch(act){
+    case "new-chat": openSheet({type:"new-chat",mode:"dm"}); return true;
+    case "nc-mode": S.sheet.mode=b.dataset.mode; renderSheet(); return true;
+    case "start-dm": startDM(b.dataset.email); return true;
+    case "save-room": saveRoom(id); return true;
+    case "room-info": openSheet({type:"room-info"}); return true;
+    case "leave-room": leaveRoom(id); return true;
+    case "delete-room": deleteRoom(id); return true;
+    case "rooms-back": leaveRoomView(); render(); return true;
+    case "room-tab": roomTab(b.dataset.tab); return true;
+    case "send-chat": sendChat(); return true;
+    case "new-thread": openSheet({type:"save-thread",ids:[]}); return true;
+    case "open-thread": openThread(id); return true;
+    case "threads-back": threadsBack(); return true;
+    case "thread-menu": openSheet({type:"thread-menu"}); return true;
+    case "thread-rename": renameThread(S.thread); return true;
+    case "thread-delete": deleteThread(S.thread); return true;
+    case "thread-create": saveToThread(null, S.sheet.ids); return true;
+    case "thread-add": saveToThread(id, S.sheet.ids); return true;
+    case "msg": if(window.getSelection&&String(window.getSelection())) return true;
+      if(S.sel){ S.sel.has(id)?S.sel.delete(id):S.sel.add(id); render(); } else openSheet({type:"msg-menu",id}); return true;
+    case "msg-thread": openSheet({type:"save-thread",ids:[id]}); return true;
+    case "msg-select": closeSheet(); S.sel=new Set([id]); render(); return true;
+    case "sel-cancel": S.sel=null; render(); return true;
+    case "sel-save": if(S.sel&&S.sel.size) openSheet({type:"save-thread",ids:[...S.sel]}); return true;
+    case "msg-copy": { const m=S.msgs.find(x=>x.id===id); closeSheet(); navigator.clipboard?.writeText(m?.text||"").then(()=>toast("Copied"),()=>toast("Couldn't copy.")); return true; }
+    case "msg-delete": { const base=roomRef(S.room), col=S.thread?base.collection("threads").doc(S.thread).collection("messages"):base.collection("messages");
+      col.doc(id).delete().catch(fail); if(S.thread) base.collection("threads").doc(S.thread).update({count:FV().increment(-1)}).catch(()=>{});
+      S.msgs=S.msgs.filter(m=>m.id!==id); closeSheet(); render(); toast("Message deleted"); return true; }
+  }
+  return false;
+}
+
 /* ================= shell ================= */
 function buildShell(){
   root.innerHTML=`<div class="shell">
@@ -540,8 +864,8 @@ function buildShell(){
   $("fab").onclick=()=>openSheet({type:"compose"});
   render();
 }
-const VIEWS=[{id:"notes",label:"Notes",icon:I.notes},{id:"followups",label:"Follow-ups",icon:I.fu},{id:"search",label:"Search",icon:I.search},{id:"more",label:"Settings",icon:I.more}];
-const SIDE_VIEWS=[VIEWS[0],{id:"alerts",label:"Notifications",icon:I.bell},VIEWS[1],VIEWS[2],VIEWS[3]];
+const VIEWS=[{id:"notes",label:"Notes",icon:I.notes},{id:"chat",label:"Chat",icon:I.chat},{id:"followups",label:"Follow-ups",icon:I.fu},{id:"search",label:"Search",icon:I.search},{id:"more",label:"Settings",icon:I.more}];
+const SIDE_VIEWS=[VIEWS[0],VIEWS[1],{id:"alerts",label:"Notifications",icon:I.bell},VIEWS[2],VIEWS[3],VIEWS[4]];
 function syncHTML(){ const on=navigator.onLine; const cls=!on?"off":S.pending?"pending":""; return `<span class="sync ${cls}"><i></i>${!on?"Offline, will sync later":S.pending?"Syncing…":"Up to date"}</span>`; }
 function avatar(uid,cls=""){ const n=realName(uid); return `<span class="av ${cls}" style="background:${colorFor(uid)}" aria-hidden="true">${esc((n[0]||"?").toUpperCase())}</span>`; }
 function nbList(){
@@ -554,12 +878,13 @@ function renderChrome(){
   $("sideNbs").innerHTML=nbList().map(n=>`<button class="nav-btn" data-space="${n.id}" aria-current="${S.space===n.id}"><span class="nb-dot" style="background:${n.id==="team"?"var(--ink)":colorFor(n.id)}"></span><span class="grow">${esc(n.name)}</span>${n.id!=="team"?`<span style="opacity:.6;display:flex">${I.lock.replace('<svg','<svg width="15" height="15" style="stroke:currentColor;fill:none;stroke-width:2"')}</span>`:""}</button>`).join("")+
     `<button class="nav-btn" data-act="new-project" style="color:var(--ink-2)">${I.plus}<span class="grow">New project</span></button>`;
   const unN=unreadCount();
-  $("sideNav").innerHTML=SIDE_VIEWS.map(v=>{ const c=v.id==="followups"?fuN:v.id==="alerts"?unN:0;
-    return `<button class="nav-btn" data-view="${v.id}" aria-current="${S.view===v.id}">${v.icon}<span class="grow">${v.label}</span>${v.id==="followups"||v.id==="alerts"?`<span class="badge ${c?"":"zero"}">${c}</span>`:""}</button>`; }).join("");
+  const chN=chatUnread();
+  $("sideNav").innerHTML=SIDE_VIEWS.map(v=>{ const c=v.id==="followups"?fuN:v.id==="alerts"?unN:v.id==="chat"?chN:0;
+    return `<button class="nav-btn" data-view="${v.id}" aria-current="${S.view===v.id}">${v.icon}<span class="grow">${v.label}</span>${v.id==="followups"||v.id==="alerts"||v.id==="chat"?`<span class="badge ${c?"":"zero"}">${c}</span>`:""}</button>`; }).join("");
   $("sideFoot").innerHTML=`${avatar(S.user.uid,"lg")}<div style="min-width:0"><div class="me-name">${esc(S.user.displayName||S.user.email)}</div>${syncHTML()}</div>`;
   const cur=S.space;
   $("topbar").innerHTML=`<button class="nb-switch" data-act="notebooks" aria-label="Switch notebook"><span class="nb-dot" style="background:${cur==="team"?"var(--ink)":colorFor(cur)}"></span><span class="t">${esc(spaceName())}</span>${I.down}</button><button class="bell-btn" data-view="alerts" aria-label="Notifications${unN?`, ${unN} unread`:""}">${I.bell}${unN?`<span class="badge">${unN>9?"9+":unN}</span>`:""}</button>`;
-  $("tabbar").innerHTML=VIEWS.map(v=>`<button data-view="${v.id}" aria-current="${S.view===v.id}">${v.icon}${v.label}${v.id==="followups"&&fuN?`<span class="badge">${fuN}</span>`:""}</button>`).join("");
+  $("tabbar").innerHTML=VIEWS.map(v=>`<button data-view="${v.id}" aria-current="${S.view===v.id}">${v.icon}${v.label}${v.id==="followups"&&fuN?`<span class="badge">${fuN}</span>`:v.id==="chat"&&chN?`<span class="badge">${chN}</span>`:""}</button>`).join("");
   $("fab").style.visibility=(S.view==="notes"||S.view==="followups")?"visible":"hidden";
 }
 
@@ -683,7 +1008,7 @@ function viewSearch(){
 function viewAlerts(){
   const list=Object.values(S.alerts).sort((a,b)=>(b.createdAt||"").localeCompare(a.createdAt||""));
   const unN=unreadCount();
-  return `<h1 class="page-title">Notifications</h1><p class="sub">Notes your team shared with you, mentions, and follow-ups marked done.</p>
+  return `<h1 class="page-title">Notifications</h1><p class="sub">Notes your team shared with you, mentions, private messages, and follow-ups marked done.</p>
     ${unN?`<button class="btn" data-act="read-all" style="margin-bottom:12px">Mark all as read (${unN})</button>`:""}
     ${!S.alertsReady?`<div class="empty"><strong>Loading…</strong></div>`:list.length?`<div class="list">${list.map(a=>`
       <button class="alert ${a.read?"":"unread"}" data-alert="${a.id}">
@@ -737,14 +1062,21 @@ function render(){
   const v=$("view");
   const keep={ text:$("iText")?.value, who:$("iWho")?.value, fu:$("iFu")?.checked, focus:document.activeElement?.id,
     addEmail:$("addEmail")?.value, myName:$("myName")?.value, selStart:document.activeElement?.selectionStart };
-  $("main").classList.toggle("wide",S.view==="notes");
-  v.innerHTML=S.view==="alerts"?viewAlerts():S.view==="followups"?viewFollowups():S.view==="search"?viewSearch():S.view==="more"?viewMore():viewNotes();
+  const mEl=$("msgs"); const mk={top:mEl?.scrollTop, bottom:mEl?mEl.scrollHeight-mEl.scrollTop-mEl.clientHeight<80:false, key:draftKey()};
+  $("main").classList.toggle("wide",S.view==="notes"||S.view==="chat");
+  $("main").classList.toggle("chatmode",S.view==="chat"); document.body.classList.toggle("in-room",S.view==="chat"&&!!S.room);
+  if(S.view!=="chat"&&S.room) leaveRoomView();
+  v.innerHTML=S.view==="chat"?viewChat():S.view==="alerts"?viewAlerts():S.view==="followups"?viewFollowups():S.view==="search"?viewSearch():S.view==="more"?viewMore():viewNotes();
   if(keep.text!=null&&$("iText")){ $("iText").value=keep.text; $("iWho").value=keep.who||""; $("iFu").checked=!!keep.fu; }
   if(keep.addEmail&&$("addEmail")) $("addEmail").value=keep.addEmail;
   if(keep.myName!=null&&$("myName")&&keep.focus==="myName") $("myName").value=keep.myName;
   if(keep.focus&&$(keep.focus)&&!S.sheet){ const el=$(keep.focus); el.focus(); if(keep.selStart!=null&&el.setSelectionRange) try{ el.setSelectionRange(keep.selStart,keep.selStart); }catch(e){} }
+  const m2=$("msgs"); if(m2){ if(S.stick||mk.bottom||mk.key!==draftKey()||mk.top==null){ m2.scrollTop=m2.scrollHeight; if(S.msgsReady) S.stick=false; } else m2.scrollTop=mk.top; }
+  grow($("chatText"));
+  if(MP.ta&&!document.body.contains(MP.ta)){ const t=$(MP.ta.id); if(t&&document.activeElement===t){ MP.ta=t; updateMentions(t); } else closeMentions(); }
 }
-function go(view){ S.view=view; if(view!=="notes") S.composerOpen=false; render(); window.scrollTo({top:0}); if(view==="search") setTimeout(()=>$("searchBox")?.focus(),30); }
+function go(view){ if(view==="chat"&&S.view!=="chat"&&!isPhone()&&!S.room){ const f=roomList()[0]; if(f){ openRoom(f.id); return; } }
+  S.view=view; if(view!=="notes") S.composerOpen=false; render(); window.scrollTo({top:0}); if(view==="search") setTimeout(()=>$("searchBox")?.focus(),30); }
 function goDay(d){ S.date=d; S.calMonth=d.slice(0,7); S.view="notes"; closeSheet(); render(); window.scrollTo({top:0}); }
 
 /* ================= sheets ================= */
@@ -776,6 +1108,11 @@ function renderSheet(){
       ${nbList().map(n=>`<button data-space="${n.id}" class="${S.space===n.id?"on":""}"><span class="nb-dot" style="background:${n.id==="team"?"var(--ink)":colorFor(n.id)}"></span><span>${esc(n.name)}<small>${esc(n.sub)}</small></span></button>`).join("")}
       <button data-act="new-project">${I.plus}<span>New project<small>A private notebook for a few people</small></span></button></div>`; }
   else if(sh.type==="project"){ h=projectHTML(sh.id); }
+  else if(sh.type==="new-chat"){ h=newChatHTML(sh); }
+  else if(sh.type==="room-info"){ h=roomInfoHTML(); if(!h) return closeSheet(); }
+  else if(sh.type==="msg-menu"){ h=msgMenuHTML(sh); if(!h) return closeSheet(); }
+  else if(sh.type==="save-thread"){ h=saveThreadHTML(sh); }
+  else if(sh.type==="thread-menu"){ h=threadMenuHTML(); if(!h) return closeSheet(); }
   else if(sh.type==="confirm"){ h=`<h2>${esc(sh.title)}</h2><p class="sub">${esc(sh.body)}</p><div class="actions"><button class="btn" data-act="close">Cancel</button><button class="btn ${sh.danger?"danger":"primary"}" data-act="confirm-ok">${esc(sh.ok)}</button></div>`; }
   sheetRoot.innerHTML=`<div class="overlay" data-act="overlay"><div class="sheet" role="dialog" aria-modal="true">${h}</div></div>`;
   const first=sheetRoot.querySelector("textarea, input:not([type=checkbox]), .actions .primary, .menu-list button");
@@ -848,7 +1185,9 @@ document.addEventListener("click",ev=>{
   if(b.dataset.filter){ S.filter=S.filter===b.dataset.filter?null:b.dataset.filter; render(); return; }
   if(b.dataset.rm){ removeMember(b.dataset.rm); return; }
   if(b.id==="addBtn"){ addMember(); return; }
+  if(b.dataset.room){ openRoom(b.dataset.room); return; }
   const act=b.dataset.act, id=b.dataset.id; if(!act) return;
+  if(chatClick(act,b)) return;
   switch(act){
     case "close": closeSheet(); break;
     case "ntf-all": spaceMembers().filter(e=>e!==myEmail()).forEach(e=>S.notify.add(e)); document.querySelectorAll("[data-ntf]").forEach(x=>x.setAttribute("aria-pressed","true")); break;
@@ -921,7 +1260,8 @@ document.addEventListener("dragover",ev=>{ const c=ev.target.closest?.(".compose
 document.addEventListener("dragleave",ev=>{ const c=ev.target.closest?.(".composer"); if(c&&!c.contains(ev.relatedTarget)) c.classList.remove("drag"); });
 document.addEventListener("drop",ev=>{ const c=ev.target.closest?.(".composer"); if(!c||!ev.dataTransfer?.files?.length) return; ev.preventDefault(); c.classList.remove("drag"); addFiles(ev.dataTransfer.files, c.id==="sComp"?"s":"i"); });
 document.addEventListener("focusin",ev=>{ if(ev.target.id==="iText"&&!S.composerOpen){ S.composerOpen=true; $("iComp")?.classList.add("open"); } });
-document.addEventListener("input",ev=>{ if(ev.target.id==="iText"||ev.target.id==="sText"){ updateMentions(ev.target); return; } if(ev.target.id==="searchBox"){ clearTimeout(window.__st); window.__st=setTimeout(()=>{ S.query=ev.target.value; render(); },150); } });
+document.addEventListener("input",ev=>{ if(ev.target.id==="chatText"){ S.drafts[draftKey()]=ev.target.value; grow(ev.target); updateMentions(ev.target); return; }
+  if(ev.target.id==="iText"||ev.target.id==="sText"){ updateMentions(ev.target); return; } if(ev.target.id==="searchBox"){ clearTimeout(window.__st); window.__st=setTimeout(()=>{ S.query=ev.target.value; render(); },150); } });
 /* mention picker: keys run before the app's own shortcuts */
 document.addEventListener("keydown",ev=>{
   if(!MP.el||ev.target!==MP.ta) return;
@@ -936,7 +1276,9 @@ document.addEventListener("focusout",ev=>{ if(ev.target===MP.ta) setTimeout(()=>
 document.addEventListener("selectionchange",()=>{ const a=document.activeElement; if(MP.el&&a===MP.ta) updateMentions(a); });
 window.addEventListener("resize",()=>{ if(MP.ta) updateMentions(MP.ta); });
 document.addEventListener("keydown",ev=>{
-  if(ev.key==="Escape"){ if(S.sheet){ closeSheet(); return; } if(S.composerOpen){ S.composerOpen=false; render(); } return; }
+  if(ev.target.id==="chatText"&&ev.key==="Enter"&&!ev.shiftKey&&!ev.isComposing&&!(isPhone()&&!ev.ctrlKey&&!ev.metaKey)){ ev.preventDefault(); sendChat(); return; }
+  if((ev.target.id==="thTitle"||ev.target.id==="thRename"||ev.target.id==="rmName")&&ev.key==="Enter"){ ev.preventDefault(); document.querySelector(ev.target.id==="thTitle"?'[data-act="thread-create"]':ev.target.id==="thRename"?'[data-act="thread-rename"]':'[data-act="save-room"]')?.click(); return; }
+  if(ev.key==="Escape"){ if(S.sheet){ closeSheet(); return; } if(S.sel){ S.sel=null; render(); return; } if(S.composerOpen){ S.composerOpen=false; render(); } return; }
   if(ev.target.id==="addEmail"&&ev.key==="Enter"){ addMember(); return; }
   if(ev.target.id==="pjName"&&ev.key==="Enter"){ saveProject(S.sheet&&S.sheet.id); return; }
   if(ev.target.id==="myName"&&ev.key==="Enter"){ document.querySelector('[data-act="save-name"]')?.click(); return; }

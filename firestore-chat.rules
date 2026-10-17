@@ -1,0 +1,17 @@
+    // ===== Chat (private chats, group rooms, threads) =====
+    match /rooms/{roomId} {
+      allow read, update: if ubrOnTeam() && ubrEmail() in resource.data.members;
+      allow create: if ubrOnTeam() && ubrEmail() in request.resource.data.members
+        && request.resource.data.createdBy == request.auth.uid;
+      allow delete: if ubrOnTeam() && (resource.data.createdBy == request.auth.uid
+        || ubrEmail() == "smaranvish11304@gmail.com");
+      match /{rest=**} {
+        allow read, write: if ubrOnTeam()
+          && ubrEmail() in get(/databases/$(database)/documents/rooms/$(roomId)).data.members;
+      }
+    }
+    match /notifications/{nid} {
+      allow create: if ubrOnTeam() && request.resource.data.from == request.auth.uid
+        && request.resource.data.type in ["chat", "chat-mention"];
+    }
+    // ===== end of chat =====

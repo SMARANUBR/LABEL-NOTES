@@ -1,4 +1,4 @@
-const CACHE = "label-notebook-team-v7";
+const CACHE = "label-notebook-team-v8";
 const CORE = ["./", "index.html", "app.js", "config.js", "manifest.webmanifest", "icon-192.png", "icon-512.png",
   "https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js",
   "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js",
