@@ -110,6 +110,17 @@ main.wide{max-width:1240px}
 .week button.today:not(.sel) .n{color:var(--rec)}
 
 /* composer */
+.mention{color:var(--focus);font-weight:600;background:color-mix(in srgb,var(--focus) 10%,transparent);border-radius:6px;padding:0 3px;margin:0 -1px}
+.mention.me{color:var(--panel);background:var(--focus)}
+.at-ic{font-weight:800;font-size:17px;line-height:1}
+.mention-pop{position:fixed;z-index:200;background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:6px;max-height:280px;overflow:auto}
+.mention-pop .mp-h{font-size:12px;color:var(--ink-2);padding:4px 8px 6px;font-weight:600}
+.mp-o{display:flex;align-items:center;gap:10px;padding:8px;border-radius:10px;cursor:pointer;min-height:44px}
+.mp-o[aria-selected="true"]{background:var(--hover);outline:2px solid var(--focus);outline-offset:-2px}
+.mp-o:hover{background:var(--hover)}
+.mp-t{display:flex;flex-direction:column;min-width:0}
+.mp-t b{font-weight:600}
+.mp-t small{color:var(--ink-2);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .composer{background:var(--panel);border:1px solid var(--line);border-radius:18px;margin-bottom:16px;overflow:hidden}
 .composer textarea{display:block;width:100%;min-height:56px;border:0;background:transparent;resize:none;outline:none;padding:16px 16px 8px;font-size:16px}
 .composer.open textarea{min-height:110px}

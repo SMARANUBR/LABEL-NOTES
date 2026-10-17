@@ -174,7 +174,7 @@ function setSpace(id){
   if(id!=="team"&&!S.projects[id]) id="team";
   // remember when you last looked at the notebook you're leaving
   if(S.space) store.set("ln-seen-"+S.user.uid+"-"+S.space, nowISO());
-  S.space=id; S.filter=null; S.mine=false; store.set("ln-space-"+S.user.uid,id);
+  S.space=id; S.filter=null; S.mine=false; S.atMe=false; closeMentions(); store.set("ln-space-"+S.user.uid,id);
   S.notify=new Set(defaultNotify());
   S.seenAt=store.get("ln-seen-"+S.user.uid+"-"+id)||nowISO();
   if(notesUnsub){ notesUnsub(); notesUnsub=null; }
@@ -195,7 +195,7 @@ const all=()=>Object.values(S.notes);
 const byDate=()=>{ const m={}; all().forEach(n=>(m[n.date]=m[n.date]||[]).push(n)); return m; };
 const entriesFor=d=>all().filter(n=>n.date===d).sort((a,b)=>a.createdAt.localeCompare(b.createdAt));
 const openFU=()=>all().filter(n=>n.followUp&&!n.done);
-const passes=n=>(!S.filter||n.tag===S.filter)&&(!S.mine||n.author===S.user.uid);
+const passes=n=>(!S.filter||n.tag===S.filter)&&(!S.mine||n.author===S.user.uid)&&(!S.atMe||mentionsMe(n));
 const nameOf=uid=>!uid?"Someone":uid===S.user.uid?"You":(S.profiles[uid]?.name||"Someone");
 const realName=uid=>uid===S.user.uid?(S.user.displayName||S.user.email):(S.profiles[uid]?.name||"?");
 const isNew=n=>n.editedBy&&n.editedBy!==S.user.uid&&(n.updatedAt||"")>S.seenAt;
@@ -336,11 +336,94 @@ function fileSheetHTML(sh){
 const spaceMembers=()=>S.space==="team"?teamEmails():(S.projects[S.space]?.members||[]);
 const defaultNotify=()=>S.space==="team"?[]:spaceMembers().filter(e=>e!==myEmail());
 const profileByEmail=e=>Object.values(S.profiles).find(p=>p.email===e);
-function mentionsIn(text){
-  const t=" "+text.toLowerCase();
-  return spaceMembers().filter(e=>{ if(e===myEmail()) return false;
-    const n=(profileByEmail(e)?.name||e.split("@")[0]).toLowerCase(); const first=n.split(/\s+/)[0];
-    return t.includes("@"+first)||t.includes("@"+n); });
+/* ---- @mentions ---- */
+const EVERYONE=["everyone","all"];
+const rxEsc=s=>s.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
+const fullName=e=>(profileByEmail(e)?.name||e.split("@")[0]).trim();
+let MX={key:"",idx:null};
+function mentionIndex(){
+  const people=spaceMembers();
+  const key=people.join(",")+"|"+people.map(fullName).join(",");
+  if(MX.key===key) return MX.idx;
+  const firstCount={};
+  people.forEach(e=>{ const f=fullName(e).split(/\s+/)[0].toLowerCase(); firstCount[f]=(firstCount[f]||0)+1; });
+  const handles=people.map(e=>{ const n=fullName(e), f=n.split(/\s+/)[0];
+    return { email:e, name:n, handle:firstCount[f.toLowerCase()]>1?n:f, alts:[...new Set([n.toLowerCase(),f.toLowerCase(),e.split("@")[0].toLowerCase()])] }; });
+  const map={}; handles.forEach(h=>h.alts.forEach(a=>{ const L=map[a]||(map[a]=[]); if(!L.includes(h.email)) L.push(h.email); }));
+  const words=[...Object.keys(map),...EVERYONE].sort((a,b)=>b.length-a.length).map(rxEsc);
+  const rx=words.length?new RegExp(`(^|[^\\p{L}\\p{N}_@.])@(${words.join("|")})(?![\\p{L}\\p{N}_])`,"giu"):null;
+  MX={key, idx:{handles, map, rx}}; return MX.idx;
+}
+/* every mention in a piece of text: [{start,end,emails|null(everyone)}] */
+function findMentions(text){
+  const {map,rx}=mentionIndex(); const out=[]; if(!rx||!text) return out;
+  rx.lastIndex=0; let m;
+  while((m=rx.exec(text))){ const w=m[2].toLowerCase(), start=m.index+m[1].length;
+    out.push({start, end:start+1+m[2].length, emails:EVERYONE.includes(w)?null:(map[w]||[])}); }
+  return out;
+}
+function mentionedEmails(text, includeSelf){
+  const set=new Set();
+  findMentions(text).forEach(x=>(x.emails||spaceMembers()).forEach(e=>set.add(e)));
+  if(!includeSelf) set.delete(myEmail());
+  return [...set];
+}
+const mentionsIn=text=>mentionedEmails(text,false);
+const mentionsMe=n=>findMentions(n.text||"").some(x=>!x.emails||x.emails.includes(myEmail()));
+function noteText(text,q){
+  const ms=findMentions(text); let h="", i=0;
+  ms.forEach(x=>{ h+=highlight(text.slice(i,x.start),q);
+    const me=!x.emails||x.emails.includes(myEmail());
+    h+=`<span class="mention${me?" me":""}" title="${esc(x.emails?x.emails.map(emailName).join(", "):"Everyone here")}">${highlight(text.slice(x.start,x.end),q)}</span>`; i=x.end; });
+  return h+highlight(text.slice(i),q);
+}
+/* suggestion popup */
+const MP={el:null, ta:null, at:0, list:[], sel:0};
+function caretXY(ta,pos){
+  const cs=getComputedStyle(ta), d=document.createElement("div");
+  ["fontFamily","fontSize","fontWeight","lineHeight","letterSpacing","paddingTop","paddingRight","paddingBottom","paddingLeft","borderTopWidth","borderLeftWidth","borderRightWidth","boxSizing","wordSpacing","textIndent"].forEach(k=>d.style[k]=cs[k]);
+  Object.assign(d.style,{position:"absolute",visibility:"hidden",whiteSpace:"pre-wrap",overflowWrap:"break-word",top:"0",left:"-9999px",width:ta.offsetWidth+"px"});
+  d.textContent=ta.value.slice(0,pos); const s=document.createElement("span"); s.textContent="​"; d.appendChild(s);
+  document.body.appendChild(d); const r=ta.getBoundingClientRect();
+  const xy={x:r.left+s.offsetLeft-ta.scrollLeft, y:r.top+s.offsetTop-ta.scrollTop, h:parseFloat(cs.lineHeight)||22};
+  d.remove(); return xy;
+}
+function mentionQuery(ta){
+  const pos=ta.selectionStart; if(pos!==ta.selectionEnd) return null;
+  const m=/(^|[^\p{L}\p{N}_@.])@([\p{L}\p{N}._-]{0,24})$/u.exec(ta.value.slice(0,pos));
+  return m?{at:pos-m[2].length-1, q:m[2].toLowerCase()}:null;
+}
+function closeMentions(){ if(MP.el){ MP.el.remove(); MP.el=null; } MP.ta=null; MP.list=[]; }
+function updateMentions(ta){
+  const mq=mentionQuery(ta); if(!mq){ closeMentions(); return; }
+  const {handles}=mentionIndex(), q=mq.q;
+  const hit=h=>!q||h.name.toLowerCase().split(/\s+/).some(w=>w.startsWith(q))||h.name.toLowerCase().startsWith(q)||h.email.toLowerCase().startsWith(q);
+  const list=handles.filter(h=>h.email!==myEmail()&&hit(h)).slice(0,6).map(h=>({...h, kind:"person"}));
+  if(handles.length>1&&(!q||"everyone".startsWith(q)||"all".startsWith(q))) list.push({kind:"all", handle:"everyone", name:S.space==="team"?"Everyone":"Everyone in this project", email:""});
+  if(!list.length){ closeMentions(); return; }
+  const same=MP.ta===ta&&MP.at===mq.at; MP.ta=ta; MP.at=mq.at; MP.list=list; MP.sel=same?Math.min(MP.sel,list.length-1):0;
+  if(!MP.el){ MP.el=document.createElement("div"); MP.el.className="mention-pop"; MP.el.setAttribute("role","listbox"); MP.el.id="mentionPop"; document.body.appendChild(MP.el); }
+  MP.el.innerHTML=`<div class="mp-h">Mention someone</div>`+list.map((h,i)=>`<div class="mp-o" role="option" id="mpo${i}" data-mi="${i}" aria-selected="${i===MP.sel}">
+    ${h.kind==="all"?`<span class="av" style="width:26px;height:26px;font-size:13px;background:var(--ink)" aria-hidden="true">@</span>`:avatarEmail(h.email).replace(/width:18px;height:18px;font-size:10px/,"width:26px;height:26px;font-size:12px")}
+    <span class="mp-t"><b>${esc(h.name)}</b><small>${h.kind==="all"?"Pings everyone who can see this notebook":esc(h.email)}</small></span></div>`).join("");
+  ta.setAttribute("aria-controls","mentionPop"); ta.setAttribute("aria-activedescendant","mpo"+MP.sel);
+  const c=caretXY(ta,mq.at), vw=window.visualViewport?.width||innerWidth, vh=window.visualViewport?.height||innerHeight;
+  const w=Math.min(300,vw-24); MP.el.style.width=w+"px";
+  const left=Math.max(12,Math.min(c.x,vw-w-12)); const ph=MP.el.offsetHeight;
+  let top=c.y+c.h+6; if(top+ph>vh-8&&c.y-ph-6>8) top=c.y-ph-6;
+  MP.el.style.left=left+"px"; MP.el.style.top=top+"px";
+}
+function pickMention(i){
+  const ta=MP.ta, h=MP.list[i]; if(!ta||!h) return;
+  const pos=ta.selectionStart, ins="@"+h.handle+" ";
+  ta.value=ta.value.slice(0,MP.at)+ins+ta.value.slice(pos);
+  const c=MP.at+ins.length; ta.focus(); ta.setSelectionRange(c,c); closeMentions();
+  if(h.kind==="person"&&S.notify&&!S.sheet?.id){ S.notify.add(h.email); document.querySelectorAll(`[data-ntf="${CSS.escape(h.email)}"]`).forEach(x=>x.setAttribute("aria-pressed","true")); }
+}
+function insertAt(p){
+  const ta=$(p+"Text"); if(!ta) return; ta.focus();
+  const s=ta.selectionStart??ta.value.length, before=ta.value.slice(0,s), pre=before&&!/\s$/.test(before)?" ":"";
+  ta.value=before+pre+"@"+ta.value.slice(ta.selectionEnd??s); const c=s+pre.length+1; ta.setSelectionRange(c,c); updateMentions(ta);
 }
 function sendAlerts(list, info){
   const b=fs.batch(), when=nowISO(), from=S.user.displayName||S.user.email;
@@ -388,7 +471,7 @@ function notifyChips(p){
     ${people.map(e=>`<button type="button" class="cat" data-ntf="${esc(e)}" aria-pressed="${S.notify.has(e)}">${avatarEmail(e)}${esc(emailName(e))}</button>`).join("")}
     <button type="button" class="cat" data-act="ntf-all" style="border-style:dashed">${S.space==="team"?"Everyone":"All members"}</button>
     <button type="button" class="cat" data-act="ntf-none" style="border-style:dashed">No one</button>
-  </div><p class="hint" style="margin:6px 0 0">Tip: type @ and a name in your note, e.g. @${esc(emailName(people[0]).split(" ")[0])}, to notify them too.</p></div>`;
+  </div><p class="hint" style="margin:6px 0 0">Tip: type @ in your note to mention someone, e.g. @${esc(emailName(people[0]).split(" ")[0])}. They get pinged. @everyone pings the whole ${S.space==="team"?"team":"project"}.</p></div>`;
 }
 function avatarEmail(e){ const p=profileByEmail(e); const n=p?.name||e; return `<span class="av" style="width:18px;height:18px;font-size:10px;background:${colorFor(e)}" aria-hidden="true">${esc((n[0]||"?").toUpperCase())}</span>`; }
 const updateNote=(id,patch)=>notesCol().doc(id).update({...patch, updatedAt:nowISO(), editedBy:S.user.uid}).catch(fail);
@@ -500,7 +583,8 @@ function composerHTML(p, note){
       ${note?"":notifyChips(p)}
       <div class="foot">
         <div class="foot-l"><label class="switch"><input type="checkbox" id="${p}Fu" ${d.followUp?"checked":""}> Needs follow-up</label>
-        <label class="btn attach-btn">${I.clip}<span>Attach files</span><input type="file" class="sr" data-attach="${p}" multiple></label></div>
+        <label class="btn attach-btn">${I.clip}<span>Attach files</span><input type="file" class="sr" data-attach="${p}" multiple></label>
+        <button type="button" class="btn attach-btn" data-act="mention" data-p="${p}" aria-label="Mention someone"><span class="at-ic" aria-hidden="true">@</span><span>Mention</span></button></div>
         <div style="display:flex;gap:8px">${p==="i"?`<button class="btn" data-act="collapse">Cancel</button>`:""}<button class="btn primary" data-act="save-note" data-p="${p}" ${note?`data-id="${note.id}"`:""}>${note?"Save changes":"Add note"}</button></div>
       </div>
     </div>
@@ -512,7 +596,7 @@ function noteHTML(n,opts={}){
   return `<article class="note ${n.followUp&&n.done?"is-done":""}" style="--c:${tagColor(n.tag)}">
     <div class="top"><span class="cat-name">${esc(tg.label)}</span><span>${opts.showDate?esc(fmtShort(n.date))+", ":""}${fmtTime(n.createdAt)}</span>${isNew(n)?`<span class="new">New</span>`:""}</div>
     <button class="menu-btn" data-act="note-menu" data-id="${n.id}" aria-label="Note options">⋯</button>
-    ${n.text?`<div class="text">${highlight(n.text,opts.q)}</div>`:""}
+    ${n.text?`<div class="text">${noteText(n.text,opts.q)}</div>`:""}
     ${attsHTML(n)}
     <div class="bottom">
       ${n.followUp?`<button class="fu ${n.done?"done":""}" data-act="toggle-done" data-id="${n.id}" aria-pressed="${!!n.done}"><span class="box">${n.done?"✓":""}</span>${n.done?"Done":"Mark done"}</button>`:""}
@@ -523,8 +607,9 @@ function noteHTML(n,opts={}){
 }
 function filterChips(){
   return `<div class="chips" role="group" aria-label="Filter notes">
-    <button class="chip" data-act="filter-all" aria-pressed="${!S.filter&&!S.mine}">All</button>
+    <button class="chip" data-act="filter-all" aria-pressed="${!S.filter&&!S.mine&&!S.atMe}">All</button>
     <button class="chip" data-act="filter-mine" aria-pressed="${S.mine}">Mine</button>
+    <button class="chip" data-act="filter-atme" aria-pressed="${!!S.atMe}">@ Mentions me</button>
     ${TAGS.map(t=>`<button class="chip" data-filter="${t.id}" aria-pressed="${S.filter===t.id}"><i style="background:${tagColor(t.id)}"></i>${esc(t.label)}</button>`).join("")}
   </div>`;
 }
@@ -731,7 +816,11 @@ function submitComposer(p, id){
   S.att[p]=[];
   if(id&&!fields.followUp) fields.done=false;
   let recipients=null;
-  if(!id){
+  if(id){
+    const before=new Set(mentionsIn(S.notes[id].text||"")), added=mentionsIn(text).filter(e=>!before.has(e));
+    if(added.length) sendAlerts(added.map(e=>({to:e,type:"mention"})),{noteId:id,date,text});
+    recipients=added.map(e=>({to:e}));
+  } else {
     const mentioned=new Set(mentionsIn(text));
     const picked=new Set([...S.notify,...mentioned]);
     recipients=[...picked].map(e=>({to:e, type:mentioned.has(e)?"mention":"note"}));
@@ -742,7 +831,7 @@ function submitComposer(p, id){
   else { $("iText").value=""; $("iWho").value=""; $("iFu").checked=false; S.composerOpen=false; }
   render();
   const nN=recipients?recipients.length:0;
-  toast(id?"Changes saved":!navigator.onLine?"Saved. It will sync when you're back online.":`Added to ${spaceName()}${nN?`, ${nN} ${nN===1?"person":"people"} notified`:""}`);
+  toast(id?`Changes saved${nN?`, ${nN} ${nN===1?"person":"people"} pinged`:""}`:!navigator.onLine?"Saved. It will sync when you're back online.":`Added to ${spaceName()}${nN?`, ${nN} ${nN===1?"person":"people"} notified`:""}`);
 }
 
 /* ================= events ================= */
@@ -777,7 +866,9 @@ document.addEventListener("click",ev=>{
     case "save-project": saveProject(id); break;
     case "leave-project": leaveProject(id); break;
     case "delete-project": deleteProject(id); break;
-    case "filter-all": S.filter=null; S.mine=false; render(); break;
+    case "filter-all": S.filter=null; S.mine=false; S.atMe=false; render(); break;
+    case "filter-atme": S.atMe=!S.atMe; render(); break;
+    case "mention": insertAt(b.dataset.p); break;
     case "filter-mine": S.mine=!S.mine; render(); break;
     case "fu-tab": S.fuTab=b.dataset.tab; render(); break;
     case "collapse": S.composerOpen=false; $("iText").value=""; discardAtt("i"); render(); break;
@@ -830,7 +921,20 @@ document.addEventListener("dragover",ev=>{ const c=ev.target.closest?.(".compose
 document.addEventListener("dragleave",ev=>{ const c=ev.target.closest?.(".composer"); if(c&&!c.contains(ev.relatedTarget)) c.classList.remove("drag"); });
 document.addEventListener("drop",ev=>{ const c=ev.target.closest?.(".composer"); if(!c||!ev.dataTransfer?.files?.length) return; ev.preventDefault(); c.classList.remove("drag"); addFiles(ev.dataTransfer.files, c.id==="sComp"?"s":"i"); });
 document.addEventListener("focusin",ev=>{ if(ev.target.id==="iText"&&!S.composerOpen){ S.composerOpen=true; $("iComp")?.classList.add("open"); } });
-document.addEventListener("input",ev=>{ if(ev.target.id==="searchBox"){ clearTimeout(window.__st); window.__st=setTimeout(()=>{ S.query=ev.target.value; render(); },150); } });
+document.addEventListener("input",ev=>{ if(ev.target.id==="iText"||ev.target.id==="sText"){ updateMentions(ev.target); return; } if(ev.target.id==="searchBox"){ clearTimeout(window.__st); window.__st=setTimeout(()=>{ S.query=ev.target.value; render(); },150); } });
+/* mention picker: keys run before the app's own shortcuts */
+document.addEventListener("keydown",ev=>{
+  if(!MP.el||ev.target!==MP.ta) return;
+  const n=MP.list.length, mv=d=>{ MP.sel=(MP.sel+d+n)%n; MP.el.querySelectorAll(".mp-o").forEach((o,i)=>o.setAttribute("aria-selected",i===MP.sel)); MP.ta.setAttribute("aria-activedescendant","mpo"+MP.sel); MP.el.querySelector(`#mpo${MP.sel}`)?.scrollIntoView({block:"nearest"}); };
+  if(ev.key==="ArrowDown"){ ev.preventDefault(); ev.stopImmediatePropagation(); mv(1); }
+  else if(ev.key==="ArrowUp"){ ev.preventDefault(); ev.stopImmediatePropagation(); mv(-1); }
+  else if((ev.key==="Enter"&&!ev.ctrlKey&&!ev.metaKey&&!ev.shiftKey)||ev.key==="Tab"){ ev.preventDefault(); ev.stopImmediatePropagation(); pickMention(MP.sel); }
+  else if(ev.key==="Escape"){ ev.preventDefault(); ev.stopImmediatePropagation(); closeMentions(); }
+},true);
+document.addEventListener("mousedown",ev=>{ const o=ev.target.closest?.(".mp-o"); if(o){ ev.preventDefault(); pickMention(+o.dataset.mi); } else if(MP.el&&!MP.el.contains(ev.target)&&ev.target!==MP.ta) closeMentions(); });
+document.addEventListener("focusout",ev=>{ if(ev.target===MP.ta) setTimeout(()=>{ if(document.activeElement!==MP.ta) closeMentions(); },120); });
+document.addEventListener("selectionchange",()=>{ const a=document.activeElement; if(MP.el&&a===MP.ta) updateMentions(a); });
+window.addEventListener("resize",()=>{ if(MP.ta) updateMentions(MP.ta); });
 document.addEventListener("keydown",ev=>{
   if(ev.key==="Escape"){ if(S.sheet){ closeSheet(); return; } if(S.composerOpen){ S.composerOpen=false; render(); } return; }
   if(ev.target.id==="addEmail"&&ev.key==="Enter"){ addMember(); return; }
