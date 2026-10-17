@@ -1,0 +1,23 @@
+    // ===== Attachments (paste inside "match /databases/{database}/documents { ... }") =====
+    // Files are kept in Firestore: files/{id} holds the details, files/{id}/chunks/{n} the bytes.
+    // Only verified team members can use them, and project files only by that project's members.
+    function ubrEmail() { return request.auth.token.email.lower(); }
+    function ubrOnTeam() {
+      return request.auth != null && request.auth.token.email_verified == true
+        && (ubrEmail() == "smaranvish11304@gmail.com"
+            || ubrEmail() in get(/databases/$(database)/documents/config/team).data.emails);
+    }
+    function ubrCanSee(space) {
+      return ubrOnTeam() && (space == "team"
+        || ubrEmail() in get(/databases/$(database)/documents/projects/$(space)).data.members);
+    }
+    match /files/{fileId} {
+      allow read, delete: if ubrCanSee(resource.data.space);
+      allow create: if ubrCanSee(request.resource.data.space)
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.size <= 15 * 1024 * 1024;
+      match /chunks/{n} {
+        allow read, create, delete: if ubrCanSee(get(/databases/$(database)/documents/files/$(fileId)).data.space);
+      }
+    }
+    // ===== end of attachments =====

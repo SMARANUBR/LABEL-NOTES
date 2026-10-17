@@ -263,6 +263,45 @@ mark{background:color-mix(in srgb,var(--t-idea) 45%,transparent);color:inherit;b
   .date-btn .num{font-size:64px}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+
+/* attachments */
+.composer .foot .foot-l{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.attach-btn{display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-weight:600}
+.attach-btn svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.composer.drag{outline:2px dashed var(--focus);outline-offset:-6px}
+.pend{display:flex;flex-wrap:wrap;gap:8px;padding:0 16px 10px}
+.pend:empty{display:none}
+.sheet .pend{padding:0 0 10px}
+.pchip{display:flex;align-items:center;gap:8px;border:1px solid var(--line);background:var(--bg);border-radius:12px;padding:6px;max-width:100%}
+.pchip .th{width:40px;height:40px;border-radius:8px;flex:none;object-fit:cover;background:var(--chip);display:grid;place-items:center;font-size:11px;font-weight:700;color:var(--ink-2)}
+.pchip .nm{min-width:0;display:flex;flex-direction:column;line-height:1.25}
+.pchip .nm b{font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:210px}
+.pchip .nm small{font-size:12px;color:var(--ink-2)}
+.pchip.failed{border-color:var(--rec)} .pchip .bad{color:var(--rec)}
+.pchip .x{border:0;background:transparent;width:32px;height:32px;border-radius:8px;color:var(--ink-2);font-size:20px;line-height:1}
+.pchip .x:hover{background:var(--hover);color:var(--ink)}
+.spin{display:inline-block;width:11px;height:11px;border:2px solid var(--line);border-top-color:var(--focus);border-radius:50%;animation:spin .8s linear infinite;vertical-align:-1px;margin-right:5px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.atts{display:flex;flex-direction:column;gap:8px;margin:4px 0 10px}
+.att-imgs{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:6px;max-width:480px}
+.att-img{border:1px solid var(--line);padding:0;border-radius:12px;overflow:hidden;background:var(--chip);aspect-ratio:4/3;cursor:zoom-in}
+.att-img img{width:100%;height:100%;object-fit:cover;display:block}
+.att-files{display:flex;flex-wrap:wrap;gap:6px}
+.att-file{display:inline-flex;align-items:center;gap:10px;border:1px solid var(--line);background:var(--bg);border-radius:12px;padding:6px 14px 6px 6px;text-align:left;max-width:100%;min-height:48px}
+.att-file:hover{border-color:var(--ink-2)}
+.att-file .ico{width:36px;height:36px;border-radius:8px;background:var(--chip);display:grid;place-items:center;font-size:11px;font-weight:700;color:var(--ink-2);flex:none}
+.att-file .ico.pdf{background:color-mix(in srgb,var(--rec) 16%,transparent);color:var(--rec)}
+.att-file .ico.audio{background:color-mix(in srgb,var(--t-ar) 18%,transparent);color:var(--t-ar);font-size:16px}
+.att-file .ico.video{background:color-mix(in srgb,var(--t-meeting) 16%,transparent);color:var(--t-meeting)}
+.att-file .nm{min-width:0;display:flex;flex-direction:column;line-height:1.25}
+.att-file b{font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px}
+.att-file small{color:var(--ink-2);font-size:12px}
+.file-title{word-break:break-word}
+.viewer-img{display:block;max-width:100%;max-height:65vh;margin:0 auto;border-radius:12px}
+.viewer-media{display:block;width:100%;max-height:60vh;border-radius:12px;background:#000}
+audio.viewer-media{background:transparent}
+.viewer-pdf{width:100%;height:65vh;border:1px solid var(--line);border-radius:12px;background:#fff}
+.actions a.btn{display:inline-flex;align-items:center;text-decoration:none;color:inherit}
 </style>
 </head>
 <body>

@@ -45,6 +45,7 @@ const I = {
   lock:'<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
   people:'<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 19c.8-3 3.2-4.5 6-4.5s5.2 1.5 6 4.5M16 5.5a3 3 0 0 1 0 5.5M18 14.5c1.5.6 2.5 2 3 4.5"/></svg>',
   bell:'<svg viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg>',
+  clip:'<svg viewBox="0 0 24 24"><path d="M20.5 11.5l-8.4 8.4a5 5 0 0 1-7.1-7.1l8.4-8.4a3.4 3.4 0 0 1 4.8 4.8l-8.4 8.4a1.7 1.7 0 0 1-2.4-2.4l7.7-7.7"/></svg>',
   down:'<svg viewBox="0 0 24 24" width="16" height="16" style="stroke:currentColor;fill:none;stroke-width:2"><path d="M6 9l6 6 6-6"/></svg>'
 };
 window.addEventListener("error",ev=>{ if(/Loading|Opening/.test(root.textContent)) root.innerHTML=`<div class="gate"><div class="box"><h1><span class="rec"></span>Keep Up with UBR</h1><p>The app hit an error: <strong>${esc(ev.message)}</strong></p><p>Most often this means config.js has a typo (a missing quote mark or comma). Re-copy it from Firebase and upload it again.</p></div></div>`; });
@@ -213,6 +214,124 @@ function saveNote(fields, id, recipients){
   if(recipients&&recipients.length) sendAlerts(recipients, {noteId:ref.id, date:fields.date, text:fields.text});
 }
 
+/* ================= attachments =================
+ * Files live in Firestore itself, so this works on the free Spark plan:
+ *   files/{id}            name, type, size, number of pieces, which notebook (space)
+ *   files/{id}/chunks/{n} the file's bytes, base64, about 700 KB per piece
+ * Each note keeps a short list of its files (plus a tiny preview for images). */
+const FILE_MAX=15*1048576, CHUNK=700000;
+S.att={i:[],s:[]};
+const fmtSize=b=>!b?"":b<1024?b+" B":b<1048576?Math.round(b/1024)+" KB":(b/1048576).toFixed(1)+" MB";
+const extOf=n=>{ const m=/\.([a-z0-9]{1,6})$/i.exec(String(n||"")); return m?m[1].toLowerCase():""; };
+const kindOf=a=>{ const t=String(a.type||""), e=extOf(a.name);
+  if(t.startsWith("image/")) return "image";
+  if(t.startsWith("audio/")||/^(mp3|wav|m4a|aac|ogg|flac|aif|aiff)$/.test(e)) return "audio";
+  if(t.startsWith("video/")||/^(mp4|mov|webm|m4v)$/.test(e)) return "video";
+  if(t==="application/pdf"||e==="pdf") return "pdf";
+  return "doc"; };
+const badge=a=>{ const k=kindOf(a); return k==="pdf"?"PDF":k==="audio"?"♪":k==="video"?"▶":(extOf(a.name).toUpperCase().slice(0,4)||"FILE"); };
+const safeThumb=t=>typeof t==="string"&&t.length<60000&&/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(t)?t:"";
+const okFileId=id=>typeof id==="string"&&/^[A-Za-z0-9]{10,40}$/.test(id);
+const fileURLs=new Map();
+function readDataURL(blob){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=()=>rej(r.error); r.readAsDataURL(blob); }); }
+async function makeThumb(file){
+  if(!/^image\/(png|jpe?g|gif|webp|bmp)$/.test(file.type)) return "";
+  try{ const url=URL.createObjectURL(file);
+    const img=await new Promise((res,rej)=>{ const i=new Image(); i.onload=()=>res(i); i.onerror=rej; i.src=url; });
+    const k=Math.min(1,320/Math.max(img.width,img.height)), c=document.createElement("canvas");
+    c.width=Math.max(1,Math.round(img.width*k)); c.height=Math.max(1,Math.round(img.height*k));
+    const g=c.getContext("2d"); g.fillStyle="#fff"; g.fillRect(0,0,c.width,c.height); g.drawImage(img,0,0,c.width,c.height);
+    URL.revokeObjectURL(url); return c.toDataURL("image/jpeg",.72);
+  }catch(e){ return ""; }
+}
+function attChips(p){
+  return S.att[p].map(a=>{
+    const th=safeThumb(a.thumb), thumb=th?`<img class="th" src="${th}" alt="">`:`<span class="th">${esc(badge(a))}</span>`;
+    const st=a.status==="uploading"?`<small><span class="spin"></span>${a.pct?`Uploading ${a.pct}%`:"Preparing…"}</small>`:a.status==="error"?`<small class="bad">${esc(a.err)}</small>`:`<small>${fmtSize(a.size)}</small>`;
+    return `<div class="pchip ${a.status==="error"?"failed":""}">${thumb}<span class="nm"><b title="${esc(a.name)}">${esc(a.name)}</b>${st}</span><button type="button" class="x" data-act="rm-att" data-p="${p}" data-key="${a.key}" aria-label="Remove ${esc(a.name)}">×</button></div>`;
+  }).join("");
+}
+function refreshAtt(p){ const el=$(p+"Atts"); if(el) el.innerHTML=attChips(p); }
+function addFiles(files,p){
+  for(const f of Array.from(files||[])){
+    if(!f.size){ toast(`"${f.name}" is empty.`); continue; }
+    if(f.size>FILE_MAX){ toast(`"${f.name}" is ${fmtSize(f.size)}. Files can be up to ${fmtSize(FILE_MAX)}. For bigger files, paste a Drive link in the note.`); continue; }
+    const a={key:Math.random().toString(36).slice(2,10), name:f.name||"file", type:f.type||"application/octet-stream", size:f.size, status:"uploading", pct:0, fresh:true, space:S.space};
+    S.att[p].push(a); upload(f,a,p);
+  }
+  if(p==="i"&&!S.composerOpen){ S.composerOpen=true; $("iComp")?.classList.add("open"); }
+  refreshAtt(p);
+}
+async function upload(f,a,p){
+  try{
+    a.thumb=await makeThumb(f); refreshAtt(p);
+    const data=(await readDataURL(f)).split(",")[1]||"";
+    a.chunks=Math.max(1,Math.ceil(data.length/CHUNK));
+    const ref=fs.collection("files").doc(); a.id=ref.id;
+    await ref.set({space:a.space, name:a.name, type:a.type, size:a.size, chunks:a.chunks, createdBy:S.user.uid, createdAt:nowISO()});
+    for(let i=0;i<a.chunks;i++){
+      if(a.cancelled) break;
+      await ref.collection("chunks").doc(String(i)).set({d:data.slice(i*CHUNK,(i+1)*CHUNK)});
+      a.pct=Math.round((i+1)/a.chunks*100); refreshAtt(p);
+    }
+    if(a.cancelled){ removeFile(a.id,a.chunks); return; }
+    a.status="done"; refreshAtt(p);
+  }catch(e){
+    a.status="error";
+    a.err=e&&e.code==="permission-denied"?"Not allowed yet: the file rules need adding in Firebase":"Upload failed. Check your connection and try again";
+    if(a.id) removeFile(a.id,a.chunks);
+    refreshAtt(p);
+  }
+}
+function removeFile(id,chunks){
+  if(!okFileId(id)) return;
+  const b=fs.batch(); for(let i=0;i<(chunks||1);i++) b.delete(fs.doc(`files/${id}/chunks/${i}`)); b.delete(fs.doc("files/"+id));
+  b.commit().catch(()=>{});
+  if(fileURLs.has(id)){ URL.revokeObjectURL(fileURLs.get(id)); fileURLs.delete(id); }
+}
+function removeAtt(p,key){
+  const L=S.att[p], i=L.findIndex(a=>a.key===key); if(i<0) return;
+  const [a]=L.splice(i,1);
+  if(a.status==="uploading") a.cancelled=true;
+  else if(a.fresh&&a.id) removeFile(a.id,a.chunks); // never saved on a note, so tidy it away now
+  refreshAtt(p);
+}
+function discardAtt(p){ S.att[p].forEach(a=>{ if(a.status==="uploading") a.cancelled=true; else if(a.fresh&&a.id) removeFile(a.id,a.chunks); }); S.att[p]=[]; }
+const savedAtts=L=>L.filter(a=>a.status==="done"&&okFileId(a.id)).map(a=>({id:a.id,name:String(a.name).slice(0,200),type:a.type,size:a.size||0,chunks:a.chunks||1,thumb:safeThumb(a.thumb)}));
+async function loadFile(a){
+  if(fileURLs.has(a.id)) return fileURLs.get(a.id);
+  const parts=await Promise.all(Array.from({length:a.chunks||1},(_,i)=>fs.doc(`files/${a.id}/chunks/${i}`).get().then(d=>{ if(!d.exists) throw {code:"not-found"}; return d.data().d||""; })));
+  const bin=atob(parts.join("")), u=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) u[i]=bin.charCodeAt(i);
+  const url=URL.createObjectURL(new Blob([u],{type:a.type||"application/octet-stream"})); fileURLs.set(a.id,url); return url;
+}
+function attsHTML(n){
+  const L=(Array.isArray(n.attachments)?n.attachments:[]).filter(a=>a&&okFileId(a.id)); if(!L.length) return "";
+  const pics=L.filter(a=>kindOf(a)==="image"&&safeThumb(a.thumb)), rest=L.filter(a=>!pics.includes(a));
+  return `<div class="atts">
+    ${pics.length?`<div class="att-imgs">${pics.map(a=>`<button type="button" class="att-img" data-act="open-file" data-id="${n.id}" data-file="${a.id}" aria-label="Open ${esc(a.name)}"><img src="${safeThumb(a.thumb)}" alt="${esc(a.name)}" loading="lazy"></button>`).join("")}</div>`:""}
+    ${rest.length?`<div class="att-files">${rest.map(a=>`<button type="button" class="att-file" data-act="open-file" data-id="${n.id}" data-file="${a.id}"><span class="ico ${kindOf(a)}">${esc(badge(a))}</span><span class="nm"><b>${esc(a.name)}</b><small>${fmtSize(a.size)}</small></span></button>`).join("")}</div>`:""}
+  </div>`;
+}
+async function openFile(noteId,fileId){
+  const n=S.notes[noteId], a=n&&(n.attachments||[]).find(x=>x.id===fileId); if(!a) return;
+  openSheet({type:"file", a, url:null, err:""});
+  try{ const url=await loadFile(a); if(S.sheet&&S.sheet.type==="file"&&S.sheet.a.id===a.id){ S.sheet.url=url; renderSheet(); } }
+  catch(e){ if(S.sheet&&S.sheet.type==="file"){ S.sheet.err=e&&e.code==="not-found"?"This file was deleted.":e&&e.code==="permission-denied"?"You don't have access to this file.":"Couldn't open the file. Check your connection and try again."; renderSheet(); } }
+}
+function fileSheetHTML(sh){
+  const a=sh.a, k=kindOf(a);
+  let body;
+  if(sh.err) body=`<p class="err">${esc(sh.err)}</p>`;
+  else if(!sh.url) body=`<p class="hint"><span class="spin"></span>Opening ${esc(fmtSize(a.size))}…</p>`;
+  else if(k==="image") body=`<img class="viewer-img" src="${sh.url}" alt="${esc(a.name)}">`;
+  else if(k==="audio") body=`<audio class="viewer-media" src="${sh.url}" controls autoplay></audio>`;
+  else if(k==="video") body=`<video class="viewer-media" src="${sh.url}" controls playsinline></video>`;
+  else if(k==="pdf"&&!isPhone()) body=`<iframe class="viewer-pdf" src="${sh.url}" title="${esc(a.name)}"></iframe>`;
+  else body=`<p class="hint">Download the file to open it on this device.</p>`;
+  return `<h2 class="file-title">${esc(a.name)}</h2><p class="sub">${esc(fmtSize(a.size))}</p>${body}
+    <div class="actions">${sh.url?`<a class="btn" href="${sh.url}" download="${esc(a.name)}">Download</a>${k==="pdf"?`<a class="btn" href="${sh.url}" target="_blank" rel="noopener">Open in new tab</a>`:""}`:""}<button class="btn primary" data-act="close">Close</button></div>`;
+}
+
 /* ================= notifications ================= */
 const spaceMembers=()=>S.space==="team"?teamEmails():(S.projects[S.space]?.members||[]);
 const defaultNotify=()=>S.space==="team"?[]:spaceMembers().filter(e=>e!==myEmail());
@@ -273,7 +392,7 @@ function notifyChips(p){
 }
 function avatarEmail(e){ const p=profileByEmail(e); const n=p?.name||e; return `<span class="av" style="width:18px;height:18px;font-size:10px;background:${colorFor(e)}" aria-hidden="true">${esc((n[0]||"?").toUpperCase())}</span>`; }
 const updateNote=(id,patch)=>notesCol().doc(id).update({...patch, updatedAt:nowISO(), editedBy:S.user.uid}).catch(fail);
-const deleteNote=id=>notesCol().doc(id).delete().catch(fail);
+const deleteNote=id=>{ const L=(S.notes[id]?.attachments)||[]; notesCol().doc(id).delete().then(()=>L.forEach(a=>removeFile(a.id,a.chunks))).catch(fail); };
 
 /* legacy notes from the offline app on this device */
 function checkLegacy(){ try{ const raw=store.get("label-notebook-store-v2"); if(!raw||store.get("label-notebook-imported-"+S.user.uid)) return;
@@ -373,13 +492,15 @@ function composerHTML(p, note){
   return `<div class="composer ${p==="i"?"inline":""} ${p!=="i"||S.composerOpen?"open":""}" id="${p}Comp">
     <label class="sr" for="${p}Text">Note</label>
     <textarea id="${p}Text" placeholder="${p==="i"?"Write a note for "+(relDay(S.date).toLowerCase()||fmtShort(S.date))+"…":"What happened? Calls, decisions, release updates, ideas…"}">${esc(d.text||"")}</textarea>
+    <div class="pend" id="${p}Atts">${attChips(p)}</div>
     <div class="more">
       <div class="cats" role="group" aria-label="Category">${TAGS.map(t=>`<button type="button" class="cat" data-cat="${t.id}" data-p="${p}" aria-pressed="${t.id===tag}"><i style="background:${tagColor(t.id)}"></i>${esc(t.label)}</button>`).join("")}</div>
       <input class="input" id="${p}Who" value="${esc(d.who||"")}" placeholder="Person or company (optional)" aria-label="Person or company">
       ${p!=="i"?`<label class="field" style="margin:0"><span>Day</span><input class="input" type="date" id="${p}Date" value="${esc(d.date||S.date)}"></label>`:""}
       ${note?"":notifyChips(p)}
       <div class="foot">
-        <label class="switch"><input type="checkbox" id="${p}Fu" ${d.followUp?"checked":""}> Needs follow-up</label>
+        <div class="foot-l"><label class="switch"><input type="checkbox" id="${p}Fu" ${d.followUp?"checked":""}> Needs follow-up</label>
+        <label class="btn attach-btn">${I.clip}<span>Attach files</span><input type="file" class="sr" data-attach="${p}" multiple></label></div>
         <div style="display:flex;gap:8px">${p==="i"?`<button class="btn" data-act="collapse">Cancel</button>`:""}<button class="btn primary" data-act="save-note" data-p="${p}" ${note?`data-id="${note.id}"`:""}>${note?"Save changes":"Add note"}</button></div>
       </div>
     </div>
@@ -391,7 +512,8 @@ function noteHTML(n,opts={}){
   return `<article class="note ${n.followUp&&n.done?"is-done":""}" style="--c:${tagColor(n.tag)}">
     <div class="top"><span class="cat-name">${esc(tg.label)}</span><span>${opts.showDate?esc(fmtShort(n.date))+", ":""}${fmtTime(n.createdAt)}</span>${isNew(n)?`<span class="new">New</span>`:""}</div>
     <button class="menu-btn" data-act="note-menu" data-id="${n.id}" aria-label="Note options">⋯</button>
-    <div class="text">${highlight(n.text,opts.q)}</div>
+    ${n.text?`<div class="text">${highlight(n.text,opts.q)}</div>`:""}
+    ${attsHTML(n)}
     <div class="bottom">
       ${n.followUp?`<button class="fu ${n.done?"done":""}" data-act="toggle-done" data-id="${n.id}" aria-pressed="${!!n.done}"><span class="box">${n.done?"✓":""}</span>${n.done?"Done":"Mark done"}</button>`:""}
       ${n.who?`<span class="person">${esc(n.who)}</span>`:""}
@@ -467,7 +589,7 @@ function viewFollowups(){
 }
 function viewSearch(){
   const q=S.query.trim().toLowerCase();
-  const items=q?all().filter(e=>passes(e)&&((e.text||"").toLowerCase().includes(q)||(e.who||"").toLowerCase().includes(q)||(TAG[e.tag]?.label||"").toLowerCase().includes(q)||nameOf(e.author).toLowerCase().includes(q))):[];
+  const items=q?all().filter(e=>passes(e)&&((e.text||"").toLowerCase().includes(q)||(e.who||"").toLowerCase().includes(q)||(TAG[e.tag]?.label||"").toLowerCase().includes(q)||nameOf(e.author).toLowerCase().includes(q)||(e.attachments||[]).some(a=>String(a.name).toLowerCase().includes(q)))):[];
   return `${whereLine()}<h1 class="page-title">Search</h1>
     <input class="input search-big" id="searchBox" type="search" value="${esc(S.query)}" placeholder="Search ${esc(spaceName())}: names, songs, companies…" aria-label="Search notes">
     ${filterChips()}
@@ -541,16 +663,20 @@ function go(view){ S.view=view; if(view!=="notes") S.composerOpen=false; render(
 function goDay(d){ S.date=d; S.calMonth=d.slice(0,7); S.view="notes"; closeSheet(); render(); window.scrollTo({top:0}); }
 
 /* ================= sheets ================= */
-function openSheet(sh){ S.sheet=sh; renderSheet(); }
-function closeSheet(){ S.sheet=null; sheetRoot.innerHTML=""; }
+function openSheet(sh){
+  if(S.sheet&&S.sheet.type==="compose"&&sh.type!=="compose") discardAtt("s");
+  if(sh.type==="compose"){ discardAtt("s"); const n=sh.id&&S.notes[sh.id]; S.att.s=n?(n.attachments||[]).filter(a=>okFileId(a.id)).map(a=>({...a,key:a.id,status:"done",fresh:false})):[]; }
+  S.sheet=sh; renderSheet(); }
+function closeSheet(){ if(S.sheet&&S.sheet.type==="compose") discardAtt("s"); S.sheet=null; sheetRoot.innerHTML=""; }
 function confirmSheet(o){ openSheet({type:"confirm",...o}); }
 function renderSheet(){
   const sh=S.sheet; if(!sh){ sheetRoot.innerHTML=""; return; }
   let h="";
   if(sh.type==="compose"){ const n=sh.id?S.notes[sh.id]:null;
     h=`<h2>${n?"Edit note":"New note"}</h2><p class="sub">${esc(spaceName())}</p>${composerHTML("s",n)}`; }
+  else if(sh.type==="file"){ h=fileSheetHTML(sh); }
   else if(sh.type==="note-menu"){ const n=S.notes[sh.id]; if(!n) return closeSheet();
-    h=`<h2>Note</h2><p class="sub">${esc(n.text.slice(0,90))}${n.text.length>90?"…":""}</p><div class="menu-list">
+    h=`<h2>Note</h2><p class="sub">${esc(n.text.slice(0,90)||((n.attachments||[]).map(a=>a.name).join(", ")))}${n.text.length>90?"…":""}</p><div class="menu-list">
       <button data-act="edit" data-id="${n.id}">${I.edit}Edit</button>
       <button data-act="move" data-id="${n.id}">${I.move}Move to another day</button>
       ${n.followUp?"":`<button data-act="make-fu" data-id="${n.id}">${I.fu}Add to follow-ups</button>`}
@@ -593,11 +719,16 @@ function projectHTML(id){
 }
 function submitComposer(p, id){
   const text=$(p+"Text").value.trim();
-  if(!text){ $(p+"Text").focus(); toast("Write something first."); return; }
+  if(S.att[p].some(a=>a.status==="uploading")){ toast("Hang on, files are still uploading."); return; }
+  const atts=savedAtts(S.att[p]);
+  if(!text&&!atts.length){ $(p+"Text").focus(); toast("Write something or attach a file first."); return; }
   const active=document.querySelector(`[data-cat][data-p="${p}"][aria-pressed="true"]`);
   const tag=active?active.dataset.cat:"meeting"; S.draft.tag=tag;
   const date=$(p+"Date")?.value||(id?S.notes[id].date:S.date);
-  const fields={text, tag, who:$(p+"Who").value.trim(), followUp:$(p+"Fu").checked, date};
+  const fields={text, tag, who:$(p+"Who").value.trim(), followUp:$(p+"Fu").checked, date, attachments:atts};
+  if(id){ const keep=new Set(atts.map(a=>a.id)); (S.notes[id].attachments||[]).filter(a=>!keep.has(a.id)).forEach(a=>removeFile(a.id,a.chunks)); }
+  S.att[p].filter(a=>a.status==="error"&&a.id).forEach(a=>removeFile(a.id,a.chunks));
+  S.att[p]=[];
   if(id&&!fields.followUp) fields.done=false;
   let recipients=null;
   if(!id){
@@ -649,8 +780,10 @@ document.addEventListener("click",ev=>{
     case "filter-all": S.filter=null; S.mine=false; render(); break;
     case "filter-mine": S.mine=!S.mine; render(); break;
     case "fu-tab": S.fuTab=b.dataset.tab; render(); break;
-    case "collapse": S.composerOpen=false; $("iText").value=""; render(); break;
+    case "collapse": S.composerOpen=false; $("iText").value=""; discardAtt("i"); render(); break;
     case "save-note": submitComposer(b.dataset.p, id); break;
+    case "rm-att": removeAtt(b.dataset.p, b.dataset.key); break;
+    case "open-file": openFile(id, b.dataset.file); break;
     case "note-menu": openSheet({type:"note-menu",id}); break;
     case "edit": openSheet({type:"compose",id}); break;
     case "move": openSheet({type:"move",id}); break;
@@ -676,6 +809,7 @@ document.addEventListener("click",ev=>{
   }
 });
 document.addEventListener("change",async ev=>{
+  if(ev.target.dataset&&ev.target.dataset.attach){ addFiles(ev.target.files, ev.target.dataset.attach); ev.target.value=""; return; }
   if(ev.target.id==="optEmail"){ const on=ev.target.checked; fs.doc("profiles/"+S.user.uid).set({emailNotify:on},{merge:true}).then(()=>toast(on?"Email alerts on":"Email alerts off")).catch(()=>toast("Couldn't save that setting.")); }
   if(ev.target.id==="optPopup"){
     if(!ev.target.checked){ store.set("ln-popups-"+S.user.uid,"0"); toast("Pop-ups off on this device"); return; }
@@ -685,6 +819,16 @@ document.addEventListener("change",async ev=>{
     else { ev.target.checked=false; toast("Pop-ups are blocked. Allow notifications for this site in your browser settings."); }
   }
 });
+document.addEventListener("paste",ev=>{
+  const p=ev.target.id==="iText"?"i":ev.target.id==="sText"?"s":null; if(!p) return;
+  const files=Array.from(ev.clipboardData?.files||[]); if(!files.length) return;
+  ev.preventDefault();
+  const stamp=new Date().toISOString().slice(0,19).replace(/[:T]/g,"-");
+  addFiles(files.map((f,i)=>f.name&&!/^image\.(png|jpe?g)$/i.test(f.name)?f:new File([f],`screenshot-${stamp}${i?"-"+i:""}.${(f.type.split("/")[1]||"png").replace("jpeg","jpg")}`,{type:f.type})), p);
+});
+document.addEventListener("dragover",ev=>{ const c=ev.target.closest?.(".composer"); if(c&&ev.dataTransfer?.types?.includes("Files")){ ev.preventDefault(); c.classList.add("drag"); } });
+document.addEventListener("dragleave",ev=>{ const c=ev.target.closest?.(".composer"); if(c&&!c.contains(ev.relatedTarget)) c.classList.remove("drag"); });
+document.addEventListener("drop",ev=>{ const c=ev.target.closest?.(".composer"); if(!c||!ev.dataTransfer?.files?.length) return; ev.preventDefault(); c.classList.remove("drag"); addFiles(ev.dataTransfer.files, c.id==="sComp"?"s":"i"); });
 document.addEventListener("focusin",ev=>{ if(ev.target.id==="iText"&&!S.composerOpen){ S.composerOpen=true; $("iComp")?.classList.add("open"); } });
 document.addEventListener("input",ev=>{ if(ev.target.id==="searchBox"){ clearTimeout(window.__st); window.__st=setTimeout(()=>{ S.query=ev.target.value; render(); },150); } });
 document.addEventListener("keydown",ev=>{
@@ -703,7 +847,7 @@ function exportAll(){
   const days=byDate(), dates=Object.keys(days).sort(); if(!dates.length){ toast("There are no notes to export yet."); return; }
   let md=`# ${spaceName()}\n\nExported ${fmtLong(todayISO())}\n`;
   dates.forEach(d=>{ md+=`\n## ${fmtLong(d)}\n\n`; entriesFor(d).forEach(e=>{ const fu=e.followUp?(e.done?" [done]":" [FOLLOW UP]"):"";
-    md+=`- **${fmtTime(e.createdAt)}, ${TAG[e.tag]?.label||e.tag}**${e.who?` (${e.who})`:""}${fu}, by ${nameOf(e.author)}: ${e.text.replace(/\n/g,"\n  ")}\n`; }); });
+    md+=`- **${fmtTime(e.createdAt)}, ${TAG[e.tag]?.label||e.tag}**${e.who?` (${e.who})`:""}${fu}, by ${nameOf(e.author)}: ${e.text.replace(/\n/g,"\n  ")}${(e.attachments||[]).length?`\n  Attachments: ${e.attachments.map(a=>a.name).join(", ")}`:""}\n`; }); });
   const file=new File([md],`${spaceName().toLowerCase().replace(/[^a-z0-9]+/g,"-")}-${todayISO()}.md`,{type:"text/markdown"});
   if(navigator.canShare&&navigator.canShare({files:[file]})&&isPhone()){ navigator.share({files:[file]}).catch(()=>{}); return; }
   const url=URL.createObjectURL(file), a=document.createElement("a"); a.href=url; a.download=file.name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),4000);
