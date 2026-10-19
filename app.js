@@ -529,7 +529,7 @@ function deleteProject(id){ const p=S.projects[id]; if(!p) return;
       for(const d of snap.docs){ b.delete(d.ref); if(++n%400===0){ await b.commit(); b=fs.batch(); } } await b.commit(); await fs.doc("projects/"+id).delete(); setSpace("team"); toast(`Deleted "${p.name}".`); }catch(e){ toast("Couldn't delete the project."); } } }); }
 
 /* ================= chat ================= */
-const CH={msgUnsub:null, thrUnsub:null, seenTimers:{}};
+const CH={msgUnsub:null, thrUnsub:null, seenTimers:{}, pending:{}, tries:0, retry:null};
 const FV=()=>firebase.firestore.FieldValue;
 const roomRef=id=>fs.collection("rooms").doc(id);
 const roomOther=r=>(r.members||[]).find(e=>e!==myEmail())||myEmail();
@@ -558,7 +558,7 @@ function watchRooms(){
     S.roomsReady=true; S.roomsErr=null;
     if(S.room&&!S.rooms[S.room]){ toast("That chat was deleted or you were removed from it."); leaveRoomView(); }
     renderChrome(); if(S.view==="chat"){ render(); markSeen(); }
-  }, e=>{ S.roomsReady=true; S.roomsErr=e.code||"unknown"; if(S.view==="chat") render(); }));
+  }, e=>{ console.warn("chat rooms:",e.code,e.message); S.roomsReady=true; S.roomsErr=e.code||"unknown"; if(S.view==="chat") render(); }));
 }
 function announceChat(r){
   const who=r.last.fromName||"Someone", where=r.type==="dm"?"":` in ${roomName(r)}`;
@@ -580,17 +580,21 @@ function openRoom(id, thread=null){
   subRoom(); render(); markSeen();
   if(!isPhone()) setTimeout(()=>$("chatText")?.focus(),30);
 }
-function subRoom(){
-  stopRoom(); const id=S.room; if(!id) return;
+function subRoom(isRetry){
+  stopRoom(); clearTimeout(CH.retry); if(!isRetry) CH.tries=0;
+  const id=S.room; if(!id) return;
   const key=draftKey(), base=roomRef(id);
+  // a room we just created must reach the server before its messages can be read
+  if(CH.pending[id]){ CH.pending[id].then(()=>{ delete CH.pending[id]; if(draftKey()===key) subRoom(true); }).catch(()=>{ delete CH.pending[id]; }); return; }
+  const retry=e=>{ if(e&&e.code==="permission-denied"&&CH.tries<4&&draftKey()===key){ CH.tries++; CH.retry=setTimeout(()=>{ if(draftKey()===key) subRoom(true); },1200*CH.tries); return true; } return false; };
   const col=S.thread?base.collection("threads").doc(S.thread).collection("messages"):base.collection("messages");
   CH.msgUnsub=col.orderBy("at").limitToLast(400).onSnapshot(snap=>{ if(key!==draftKey()) return;
     S.msgs=snap.docs.map(d=>({id:d.id,...d.data()})); S.msgsReady=true; S.msgsErr=null; render(); markSeen(); },
-    e=>{ if(key!==draftKey()) return; S.msgsReady=true; S.msgsErr=e.code||"unknown"; render(); });
+    e=>{ if(key!==draftKey()) return; console.warn("chat messages:",e.code,e.message); if(retry(e)) return; S.msgsReady=true; S.msgsErr=e.code||"unknown"; render(); });
   CH.thrUnsub=base.collection("threads").orderBy("updatedAt","desc").limit(200).onSnapshot(snap=>{ if(id!==S.room) return;
     S.threads={}; snap.docs.forEach(d=>S.threads[d.id]={id:d.id,...d.data()});
     if(S.thread&&!S.threads[S.thread]&&!snap.metadata?.hasPendingWrites&&S.msgsReady){ toast("That thread was deleted."); S.thread=null; S.roomTab="threads"; subRoom(); }
-    if(S.view==="chat") render(); }, ()=>{});
+    if(S.view==="chat") render(); }, e=>{ console.warn("chat threads:",e.code,e.message); });
 }
 function markSeen(){
   const r=S.rooms[S.room]; if(!r||S.view!=="chat"||document.visibilityState!=="visible") return;
@@ -634,7 +638,8 @@ function startDM(email){
   const pair=[myEmail(),email].sort(), id="dm_"+pair.join("_").replace(/\//g,"_");
   if(S.rooms[id]){ openRoom(id); return; }
   const at=nowISO(), r={type:"dm", members:[...new Set(pair)], createdBy:S.user.uid, createdAt:at, updatedAt:at};
-  roomRef(id).set(r,{merge:true}).catch(e=>{ toast(e&&e.code==="permission-denied"?"Chat isn't switched on yet. The owner needs to add the chat rules in Firebase.":"Couldn't start the chat."); delete S.rooms[id]; if(S.room===id){ leaveRoomView(); render(); } });
+  CH.pending[id]=roomRef(id).set(r,{merge:true});
+  CH.pending[id].catch(e=>{ toast(e&&e.code==="permission-denied"?"Chat isn't switched on yet. The owner needs to add the chat rules in Firebase.":"Couldn't start the chat."); delete S.rooms[id]; if(S.room===id){ leaveRoomView(); render(); } });
   S.rooms[id]={id,...r}; openRoom(id);
 }
 function saveRoom(id){
@@ -644,7 +649,8 @@ function saveRoom(id){
   const at=nowISO();
   if(id){ roomRef(id).update({name,members,updatedAt:at}).catch(fail); closeSheet(); toast("Room updated"); render(); return; }
   const ref=fs.collection("rooms").doc(), r={type:"group", name, members, createdBy:S.user.uid, createdAt:at, updatedAt:at};
-  ref.set(r).catch(e=>{ toast(e&&e.code==="permission-denied"?"Chat isn't switched on yet. The owner needs to add the chat rules in Firebase.":"Couldn't create the room."); delete S.rooms[ref.id]; if(S.room===ref.id){ leaveRoomView(); render(); } });
+  CH.pending[ref.id]=ref.set(r);
+  CH.pending[ref.id].catch(e=>{ toast(e&&e.code==="permission-denied"?"Chat isn't switched on yet. The owner needs to add the chat rules in Firebase.":"Couldn't create the room."); delete S.rooms[ref.id]; if(S.room===ref.id){ leaveRoomView(); render(); } });
   S.rooms[ref.id]={id:ref.id,...r}; openRoom(ref.id); toast(`Created ${name}. Only its members can see it.`);
 }
 function leaveRoom(id){ const r=S.rooms[id]; if(!r) return;
@@ -698,7 +704,7 @@ function roomRow(r){
 }
 function msgsHTML(r){
   if(!S.msgsReady) return `<div class="chat-empty"><span class="spin"></span></div>`;
-  if(S.msgsErr) return `<div class="chat-empty"><strong>${S.msgsErr==="permission-denied"?"Chat isn't switched on yet":"Couldn't load messages"}</strong>${S.msgsErr==="permission-denied"?"The owner needs to add the chat rules in Firebase.":"Check your connection and try again."}</div>`;
+  if(S.msgsErr) return `<div class="chat-empty"><strong>${S.msgsErr==="permission-denied"?"Chat isn't switched on yet":"Couldn't load messages"}</strong>${S.msgsErr==="permission-denied"?"The owner needs to add the chat rules in Firebase.":"Check your connection and try again."}<button class="btn" data-act="chat-retry" style="margin-top:10px">Try again</button></div>`;
   if(!S.msgs.length) return `<div class="chat-empty">${roomAvatar(r,56)}<strong>${S.thread?"Nothing in this thread yet":r.type==="dm"?`This is the start of your chat with ${esc(roomName(r))}`:`Welcome to ${esc(roomName(r))}`}</strong>${S.thread?"Write the first message below.":r.type==="dm"?"Only the two of you can see it.":`Only the ${r.members.length} people in this room can see it. Type @ to ping someone.`}</div>`;
   let h="", prevDay="", prev=null; const sel=S.sel;
   S.msgs.forEach(m=>{
@@ -821,6 +827,7 @@ function chatClick(act,b){
     case "rooms-back": leaveRoomView(); render(); return true;
     case "room-tab": roomTab(b.dataset.tab); return true;
     case "send-chat": sendChat(); return true;
+    case "chat-retry": S.msgsReady=false; S.msgsErr=null; render(); subRoom(); return true;
     case "new-thread": openSheet({type:"save-thread",ids:[]}); return true;
     case "open-thread": openThread(id); return true;
     case "threads-back": threadsBack(); return true;
